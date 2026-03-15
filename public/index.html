@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>微博账号智能管家</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="bg"></div>
+    <main class="container">
+      <header class="top-banner">
+        <div class="brand-block">
+          <p class="eyebrow">Web + Server Console</p>
+          <h1>微博账号智能管家</h1>
+          <div id="authStatus" class="hint">正在加载账号状态...</div>
+        </div>
+
+        <nav class="top-nav" aria-label="primary navigation">
+          <button class="nav-tab active" type="button" data-tab="home">主页</button>
+          <button class="nav-tab" type="button" data-tab="data">数据中心</button>
+          <button class="nav-tab" type="button" data-tab="config">配置中心</button>
+        </nav>
+
+        <div class="banner-side">
+          <button id="btnBannerNotify" class="banner-notify" type="button">
+            <span class="banner-notify-icon">消息</span>
+            <span id="bannerNotifyText">0 条提醒</span>
+          </button>
+          <div class="banner-account">
+            <img id="bannerAvatar" class="banner-avatar" alt="avatar" />
+            <div class="banner-account-copy">
+              <div id="bannerName" class="banner-name">未登录微博账号</div>
+              <div id="bannerSub" class="hint">请先完成微博登录</div>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <section class="page active" data-page="home">
+        <div class="app-shell">
+          <section class="main-column">
+            <section class="panel hero-panel">
+              <div class="panel-head">
+                <div>
+                  <h2>微博内容列表</h2>
+                  <div class="hint">默认显示今日微博，可按时间范围快速筛选。</div>
+                </div>
+                <div id="draftRangeLabel" class="hint">今日微博</div>
+              </div>
+              <div class="draft-toolbar">
+                <div id="draftFilters" class="filter-group" aria-label="draft filters">
+                  <button class="filter-chip active" type="button" data-filter="today">今日</button>
+                  <button class="filter-chip" type="button" data-filter="yesterday">昨日</button>
+                  <button class="filter-chip" type="button" data-filter="this_week">本周</button>
+                  <button class="filter-chip" type="button" data-filter="last_7d">近7天</button>
+                  <button class="filter-chip" type="button" data-filter="last_30d">近30天</button>
+                </div>
+                <div id="draftSummary" class="draft-summary">当前筛选 0 条 · 累计保存 0 条 · 已删除 0 条</div>
+              </div>
+              <div id="drafts" class="drafts"></div>
+            </section>
+          </section>
+
+          <aside class="sidebar">
+            <section class="panel quick-panel">
+              <div class="panel-head">
+                <div>
+                  <h2>快捷操作台</h2>
+                  <div class="hint">核心入口放在这里，其他配置放到配置中心。</div>
+                </div>
+              </div>
+              <div class="quick-actions">
+                <button id="btnGenerate" class="quick-primary">立即生成热点草稿</button>
+                <button id="btnGenerateDailyKindness" class="secondary">立即生成每日一善超话草稿</button>
+                <button id="btnTestNotify" class="secondary">测试消息通知</button>
+              </div>
+              <div class="quick-stats">
+                <div class="quick-stat">
+                  <span>下一时段</span>
+                  <strong id="homeNextSlotLabel">-</strong>
+                </div>
+                <div class="quick-stat">
+                  <span>未读提醒</span>
+                  <strong id="homeNotificationCount">0</strong>
+                </div>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2>提醒消息</h2>
+                  <span class="hint">用于审批和系统通知</span>
+                </div>
+                <div class="actions">
+                  <button id="btnReadAllNotifications" class="secondary" type="button">全部已读</button>
+                </div>
+              </div>
+              <div id="notifications" class="list"></div>
+            </section>
+          </aside>
+        </div>
+      </section>
+
+      <section class="page" data-page="data">
+        <div class="page-stack">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>账号概览</h2>
+              <div class="actions">
+                <button id="btnLogin">微博登录</button>
+                <button id="btnSyncAccount" class="secondary">刷新资料</button>
+              </div>
+            </div>
+            <div id="accountCard" class="account-card empty">未登录微博账号</div>
+            <div class="metric-grid compact-grid" id="metricsSummary"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <h2>最近微博数据</h2>
+                <div class="hint">阅读、点赞、评论、转发</div>
+              </div>
+              <div class="actions">
+                <button id="btnSyncStats">同步微博数据</button>
+                <button id="btnBackup" class="secondary">备份数据库</button>
+              </div>
+            </div>
+            <div id="postMetrics" class="list metrics-list"></div>
+          </section>
+
+          <section class="panel">
+            <h2>数据备份</h2>
+            <div id="backups" class="list"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="page" data-page="config">
+        <div class="app-shell config-shell">
+          <section class="main-column">
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2>准点配置</h2>
+                  <div id="nextSlotLabel" class="hint">下一时段：-</div>
+                </div>
+                <div class="actions">
+                  <button id="btnSaveSchedule">保存配置</button>
+                  <button id="btnRefreshAll" class="secondary">刷新全部</button>
+                </div>
+              </div>
+              <div class="form-grid">
+                <label class="field checkbox-field">
+                  <span>启用自动生成</span>
+                  <input id="scheduleEnabled" type="checkbox" />
+                </label>
+                <label class="field">
+                  <span>开始小时</span>
+                  <input id="publishStartHour" type="number" min="0" max="23" />
+                </label>
+                <label class="field">
+                  <span>结束小时</span>
+                  <input id="publishEndHour" type="number" min="1" max="24" />
+                </label>
+                <label class="field">
+                  <span>提前生成(分钟)</span>
+                  <input id="generateLeadMinutes" type="number" min="1" max="180" />
+                </label>
+                <label class="field">
+                  <span>提前提醒(分钟)</span>
+                  <input id="reminderLeadMinutes" type="number" min="0" max="180" />
+                </label>
+                <label class="field">
+                  <span>单源抓取条数</span>
+                  <input id="hotSearchCount" type="number" min="5" max="30" />
+                </label>
+                <label class="field">
+                  <span>模型超时(ms)</span>
+                  <input id="llmTimeoutMs" type="number" min="10000" max="180000" step="5000" />
+                </label>
+                <label class="field">
+                  <span>图片宽度(px)</span>
+                  <input id="imageWidth" type="number" min="256" max="2048" step="64" />
+                </label>
+                <label class="field">
+                  <span>图片高度(px)</span>
+                  <input id="imageHeight" type="number" min="256" max="2048" step="64" />
+                </label>
+              </div>
+              <div class="field">
+                <span>内容板块</span>
+                <div id="categorySelector" class="category-selector"></div>
+              </div>
+              <div class="field">
+                <span>热门话题检索源</span>
+                <div class="hint">可启用多个来源并调整优先级，数字越小优先级越高。</div>
+                <div id="topicSourceSelector" class="topic-source-selector"></div>
+              </div>
+              <div class="hint">
+                如果多来源候选里有命中你所选板块的话题，则优先使用高优先级来源；如果没有，再按板块自由发挥。
+              </div>
+            </section>
+          </section>
+
+          <aside class="sidebar">
+            <section class="panel">
+              <h2>原始账号数据</h2>
+              <pre id="accountInfo">-</pre>
+            </section>
+          </aside>
+        </div>
+      </section>
+    </main>
+
+    <div id="imageModal" class="image-modal hidden">
+      <button id="btnCloseModal" class="image-close" aria-label="close">×</button>
+      <img id="modalImage" alt="preview" />
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,24 @@
+{
+  "name": "weibo-account-smart-manager",
+  "version": "0.1.0",
+  "description": "Web + server smart manager for Weibo account operations",
+  "private": true,
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js"
+  },
+  "dependencies": {
+    "axios": "^1.8.4",
+    "cors": "^2.8.5",
+    "dayjs": "^1.11.13",
+    "dotenv": "^16.5.0",
+    "express": "^4.21.2",
+    "node-cron": "^4.0.5",
+    "sqlite": "^5.1.1",
+    "sqlite3": "^5.1.7"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}
