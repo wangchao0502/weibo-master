@@ -35,6 +35,9 @@ function write(level, scope, message, meta) {
 }
 
 module.exports = {
+  debug(scope, message, meta) {
+    write("debug", scope, message, meta);
+  },
   info(scope, message, meta) {
     write("info", scope, message, meta);
   },

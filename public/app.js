@@ -554,7 +554,7 @@ function renderDrafts(items) {
             ${draft.__pending ? "" : buildCardMenu(draft)}
           </div>
           <div class="weibo-copy">
-            ${draft.__pending ? buildLoadingBody() : escapeHtml(draft.text)}
+            ${draft.__pending ? buildLoadingBody() : escapeHtml(String(draft.text || "").trimStart())}
           </div>
           ${draft.__pending ? "" : buildWeiboImages(images)}
           ${showRefine ? buildRefineComposer(draft, isRefining) : ""}

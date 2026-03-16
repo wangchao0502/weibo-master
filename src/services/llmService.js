@@ -29,7 +29,55 @@ function normalizeInlineText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
+function extractHashtags(text) {
+  return String(text || "").match(/#[^#\n\r]{1,80}#/g) || [];
+}
+
+function uniqueTags(tags = []) {
+  const seen = new Set();
+  return tags
+    .map((tag) => normalizeInlineText(tag))
+    .filter((tag) => tag.startsWith("#") && tag.endsWith("#"))
+    .filter((tag) => {
+      const key = tag.toLowerCase();
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+}
+
+function toWeiboHotTag(topic) {
+  if (!topic || topic.sourceId !== "weibo_hot_search") {
+    return "";
+  }
+  const keyword = normalizeInlineText(topic.keyword).replace(/^#+|#+$/g, "");
+  return keyword ? `#${keyword}#` : "";
+}
+
+function findSelectedTopic(strategyTopics = [], topicName = "") {
+  const normalizedTopicName = normalizeInlineText(topicName);
+  if (!normalizedTopicName) {
+    return strategyTopics[0] || null;
+  }
+  return strategyTopics.find((topic) => normalizeInlineText(topic.keyword) === normalizedTopicName)
+    || strategyTopics.find((topic) => normalizedTopicName.includes(normalizeInlineText(topic.keyword)))
+    || strategyTopics.find((topic) => normalizeInlineText(topic.keyword).includes(normalizedTopicName))
+    || strategyTopics[0]
+    || null;
+}
+
+function moveTagsToFront(copy, selectedTopic = null) {
+  const topicTag = toWeiboHotTag(selectedTopic);
+  const inlineTags = extractHashtags(copy);
+  const tags = uniqueTags([topicTag, ...inlineTags]);
+  const body = normalizeInlineText(String(copy || "").replace(/#[^#\n\r]{1,80}#/g, " "));
+  return normalizeInlineText(`${tags.join(" ")} ${body}`);
+}
+
 function extractJsonObject(text) {
+
   if (!text) {
     return null;
   }
@@ -205,6 +253,47 @@ function buildSourceSummary(strategy) {
 
 function buildCopyLengthHint(schedule) {
   return `${schedule.copyMinLength}-${schedule.copyMaxLength}`;
+}
+
+const RIGOROUS_CATEGORY_IDS = new Set(["technology", "finance", "education", "health", "military", "international", "auto"]);
+const CASUAL_CATEGORY_IDS = new Set(["entertainment", "sports", "gaming", "lifestyle"]);
+
+function buildNumberedRules(start, rules) {
+  return rules.map((rule, index) => `${start + index}. ${rule}`);
+}
+
+function buildVoiceStyleRules(selectedCategories = []) {
+  const selectedIds = selectedCategories.map((item) => item.id);
+  const hasRigorous = selectedIds.some((id) => RIGOROUS_CATEGORY_IDS.has(id));
+  const hasCasual = selectedIds.some((id) => CASUAL_CATEGORY_IDS.has(id));
+  const rules = [
+    '必须以“我”的视角写，像真人博主在表达观察、判断和取舍，不要写成新闻播报、通稿或公文口吻',
+    '要有信息密度和个人判断，但表达自然，不要堆术语，也不要空泛抒情'
+  ];
+
+  if (hasRigorous && !hasCasual) {
+    rules.push('这类偏严谨的话题要专业克制，信息要准确，结论要有边界，不确定内容明确用保守措辞');
+  } else if (hasCasual && !hasRigorous) {
+    rules.push('这类偏生活或娱乐的话题可以自然、轻松、略带幽默，但不要油腻玩梗，更不要为了活泼牺牲信息量');
+  } else {
+    rules.push('如果话题偏科技、教育、健康等严谨领域，就专业克制；如果偏生活、娱乐等轻松领域，可以自然幽默，但都要保证信息量和判断力');
+  }
+
+  rules.push('不要在结尾引导点赞、评论、转发、关注，也不要写“你怎么看”“欢迎留言”等互动钩子');
+  return rules;
+}
+
+function shouldRetryStructuredContent(error) {
+  if (!(error instanceof GenerationFailedError)) {
+    return false;
+  }
+  return ["invalid_model_payload", "copy_too_short", "copy_too_long"].includes(error.code);
+}
+
+function buildTextRetryDelayMs(attempt) {
+  const base = 1200;
+  const jitter = Math.floor(Math.random() * 300);
+  return base * attempt + jitter;
 }
 
 function parseModelPayload(parsed, contextLabel = "微博草稿", options = {}) {
@@ -446,7 +535,7 @@ async function decideGenerationStrategy(schedule) {
   };
 }
 
-function buildPrompt(slotTime, strategy, schedule) {
+function buildPrompt(slotTime, strategy, schedule, retryContext = null) {
   const categoriesLine = strategy.selectedCategories.length
     ? strategy.selectedCategories.map((item) => `${item.name}(${item.description})`).join("；")
     : "未限制板块";
@@ -467,6 +556,7 @@ function buildPrompt(slotTime, strategy, schedule) {
       `发布时间槽位：${slotTime.format("YYYY-MM-DD HH:mm")} ${config.timezone}`,
       `用户选定板块：${categoriesLine}`,
       `启用的话题来源及优先级：${sourceLine}`,
+      retryContext ? `上一次生成未通过：${retryContext.reason}。这一次必须严格修正。` : null,
       "当前多来源话题候选没有明显命中这些板块，请基于这些板块的最新资讯自由发挥，生成一条时效性微博。",
       categoryNews || "暂无板块资讯",
       `返回 JSON，结构为：${schema}`,
@@ -475,8 +565,9 @@ function buildPrompt(slotTime, strategy, schedule) {
       `2. 文案控制在 ${buildCopyLengthHint(schedule)} 个中文字符`,
       "3. 必须体现“正在发生”或“值得马上关注”的时效性",
       "4. 不要编造事实，信息不足时用保守措辞",
-      "5. 带 1-2 个相关话题标签，不要堆砌"
-    ].join("\n\n");
+      "5. 带 1-2 个相关话题标签，不要堆砌",
+      ...buildNumberedRules(6, buildVoiceStyleRules(strategy.selectedCategories))
+    ].filter(Boolean).join("\n\n");
   }
 
   const topicLines = strategy.topics
@@ -505,6 +596,7 @@ function buildPrompt(slotTime, strategy, schedule) {
     `发布时间槽位：${slotTime.format("YYYY-MM-DD HH:mm")} ${config.timezone}`,
     `用户选定板块：${categoriesLine}`,
     `启用的话题来源及优先级：${sourceLine}`,
+    retryContext ? `上一次生成未通过：${retryContext.reason}。这一次必须严格修正。` : null,
     strategyHint,
     "话题候选：",
     topicLines || "暂无话题候选",
@@ -520,8 +612,9 @@ function buildPrompt(slotTime, strategy, schedule) {
     "4. 不要编造事实；上下文不足时使用保守措辞",
     "5. 带 1-2 个相关话题标签，不要堆砌",
     "6. 如果有图片提示词，需要和所选话题强相关",
-    "7. image_prompts 必须按图片顺序给出 1-N 条不同提示词，每张图都要有不同的主体、景别、构图或重点，不能只是同义改写"
-  ].join("\n\n");
+    "7. image_prompts 必须按图片顺序给出 1-N 条不同提示词，每张图都要有不同的主体、景别、构图或重点，不能只是同义改写",
+    ...buildNumberedRules(8, buildVoiceStyleRules(strategy.selectedCategories))
+  ].filter(Boolean).join("\n\n");
 }
 
 async function generateTextPayload(slotTime, strategy, timeoutMs, schedule) {
@@ -532,11 +625,48 @@ async function generateTextPayload(slotTime, strategy, timeoutMs, schedule) {
     });
   }
 
-  const prompt = buildPrompt(slotTime, strategy, schedule);
-  const response = await requestTextPayload(prompt, timeoutMs);
-  const content = response.data?.choices?.[0]?.message?.content || "";
-  const parsed = extractJsonObject(content);
-  return parseModelPayload(parsed, "微博草稿", { minCopyLength: schedule.copyMinLength, maxCopyLength: schedule.copyMaxLength });
+  let lastError = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const prompt = buildPrompt(
+        slotTime,
+        strategy,
+        schedule,
+        lastError ? { attempt, reason: lastError.message } : null
+      );
+      logger.debug("llm", "draft generation prompt", {
+        attempt,
+        timeoutMs,
+        prompt
+      });
+      const response = await requestTextPayload(prompt, timeoutMs);
+      const content = response.data?.choices?.[0]?.message?.content || "";
+      logger.debug("llm", "draft generation response", {
+        attempt,
+        content
+      });
+      const parsed = extractJsonObject(content);
+      return parseModelPayload(parsed, "微博草稿", {
+        minCopyLength: schedule.copyMinLength,
+        maxCopyLength: schedule.copyMaxLength
+      });
+    } catch (error) {
+      if (attempt >= 3 || !shouldRetryStructuredContent(error)) {
+        throw error;
+      }
+      lastError = error;
+      const delayMs = buildTextRetryDelayMs(attempt);
+      logger.warn("llm", "retrying text generation after content validation failure", {
+        attempt,
+        delayMs,
+        error: error.message,
+        code: error.code || "generation_failed"
+      });
+      await sleep(delayMs);
+    }
+  }
+
+  throw lastError || new GenerationFailedError("大模型生成失败，未生成微博草稿。");
 }
 
 async function generateImages({ copy, imageCount, imagePrompts, timeoutMs, imageWidth, imageHeight }) {
@@ -626,6 +756,8 @@ async function generateImages({ copy, imageCount, imagePrompts, timeoutMs, image
 function buildRefinePrompt(draft, suggestion, options = {}) {
   const refineImages = Boolean(options.refineImages);
   const schedule = options.schedule || { copyMinLength: 200, copyMaxLength: 500 };
+  const selectedCategories = Array.isArray(options.selectedCategories) ? options.selectedCategories : [];
+  const retryContext = options.retryContext || null;
   const schema = refineImages && config.openai.imageModel
     ? `{"topic":"...", "copy":"...", "image_count":1-${schedule.maxImageCount}, "image_prompts":["...", "..."]}`
     : '{"topic":"...", "copy":"..."}';
@@ -637,8 +769,11 @@ function buildRefinePrompt(draft, suggestion, options = {}) {
 
   return [
     "你将根据用户建议，对现有微博草稿做一次重新生成和润色。",
-    `当前草稿正文：\n${draft.text || ""}`,
-    `用户修改建议：\n${suggestion}`,
+    retryContext ? `上一次润色未通过：${retryContext.reason}。这一次必须严格修正。` : null,
+    `当前草稿正文：
+${draft.text || ""}`,
+    `用户修改建议：
+${suggestion}`,
     `当前草稿来源：${draft.source || "-"}`,
     imageHint,
     `返回 JSON，结构为：${schema}`,
@@ -650,8 +785,9 @@ function buildRefinePrompt(draft, suggestion, options = {}) {
     "5. 不要编造事实；信息不确定时用保守措辞",
     "6. 带 1-2 个相关话题标签，不要堆砌",
     "7. 如果返回图片提示词，需要和新的正文强相关",
-    "8. image_prompts 必须按图片顺序给出多条不同提示词，每张图都要有不同重点，不能只换几个词"
-  ].join("\n\n");
+    "8. image_prompts 必须按图片顺序给出多条不同提示词，每张图都要有不同重点，不能只换几个词",
+    ...buildNumberedRules(9, buildVoiceStyleRules(selectedCategories))
+  ].filter(Boolean).join("\n\n");
 }
 
 async function generateRefinedDraftPayload({ draft, suggestion, refineImages = false }) {
@@ -671,17 +807,65 @@ async function generateRefinedDraftPayload({ draft, suggestion, refineImages = f
       });
     }
 
-    const prompt = buildRefinePrompt(draft, suggestion, { refineImages, schedule });
-    const response = await requestTextPayload(prompt, schedule.llmTimeoutMs);
-    const content = response.data?.choices?.[0]?.message?.content || "";
-    const parsed = extractJsonObject(content);
-    const textPayload = parseModelPayload(parsed, "润色后的微博正文", { minCopyLength: schedule.copyMinLength, maxCopyLength: schedule.copyMaxLength });
+    const selectedCategories = getCategoriesByIds(schedule.contentCategoryIds);
+    let lastError = null;
+    let textPayload;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        const prompt = buildRefinePrompt(draft, suggestion, {
+          refineImages,
+          schedule,
+          selectedCategories,
+          retryContext: lastError ? { attempt, reason: lastError.message } : null
+        });
+        logger.debug("llm", "draft refine prompt", {
+          draftId: draft.id,
+          attempt,
+          refineImages,
+          timeoutMs: schedule.llmTimeoutMs,
+          prompt
+        });
+        const response = await requestTextPayload(prompt, schedule.llmTimeoutMs);
+        const content = response.data?.choices?.[0]?.message?.content || "";
+        logger.debug("llm", "draft refine response", {
+          draftId: draft.id,
+          attempt,
+          content
+        });
+        const parsed = extractJsonObject(content);
+        textPayload = parseModelPayload(parsed, "润色后的微博正文", {
+          minCopyLength: schedule.copyMinLength,
+          maxCopyLength: schedule.copyMaxLength
+        });
+        break;
+      } catch (error) {
+        if (attempt >= 3 || !shouldRetryStructuredContent(error)) {
+          throw error;
+        }
+        lastError = error;
+        const delayMs = buildTextRetryDelayMs(attempt);
+        logger.warn("llm", "retrying draft refinement after content validation failure", {
+          draftId: draft.id,
+          attempt,
+          delayMs,
+          error: error.message,
+          code: error.code || "generation_failed"
+        });
+        await sleep(delayMs);
+      }
+    }
+
+    const normalizedCopy = moveTagsToFront(textPayload.copy);
+    logger.debug("llm", "refined draft normalized tags", {
+      draftId: draft.id,
+      copy: normalizedCopy
+    });
 
     let imageUrls = [];
     if (refineImages && config.openai.imageModel) {
       try {
         imageUrls = await generateImages({
-          copy: textPayload.copy,
+          copy: normalizedCopy,
           imageCount: Math.min(textPayload.imageCount, schedule.maxImageCount),
           imagePrompts: textPayload.imagePrompts,
           timeoutMs: schedule.llmTimeoutMs,
@@ -708,7 +892,7 @@ async function generateRefinedDraftPayload({ draft, suggestion, refineImages = f
     });
 
     return {
-      copy: textPayload.copy,
+      copy: normalizedCopy,
       topic: textPayload.topic,
       imageUrls: imageUrls.slice(0, 9),
       source: normalizeRefineImageSourceLabel()
@@ -741,12 +925,26 @@ async function generateDraftPayload(slotTime) {
 
   try {
     const textPayload = await generateTextPayload(slotTime, strategy, schedule.llmTimeoutMs, schedule);
+    const selectedTopic = findSelectedTopic(strategy.topics, textPayload.topic);
+    const normalizedCopy = moveTagsToFront(textPayload.copy, selectedTopic);
+    logger.debug("llm", "draft normalized tags", {
+      topic: textPayload.topic,
+      selectedTopic: selectedTopic
+        ? {
+            keyword: selectedTopic.keyword,
+            label: selectedTopic.label,
+            sourceId: selectedTopic.sourceId,
+            sourceName: selectedTopic.sourceName
+          }
+        : null,
+      copy: normalizedCopy
+    });
 
     let imageUrls = [];
     if (config.openai.imageModel) {
       try {
         imageUrls = await generateImages({
-          copy: textPayload.copy,
+          copy: normalizedCopy,
           imageCount: Math.min(textPayload.imageCount, schedule.maxImageCount),
           imagePrompts: textPayload.imagePrompts,
           timeoutMs: schedule.llmTimeoutMs,
@@ -774,7 +972,7 @@ async function generateDraftPayload(slotTime) {
     });
 
     return {
-      copy: textPayload.copy,
+      copy: normalizedCopy,
       topic: textPayload.topic,
       strategyMode: strategy.mode,
       selectedCategories: strategy.selectedCategories.map((item) => item.name),
@@ -829,8 +1027,15 @@ async function generateDailyKindnessPayload() {
   ].join("\n\n");
 
   try {
+    logger.debug("llm", "daily kindness prompt", {
+      timeoutMs: schedule.llmTimeoutMs,
+      prompt
+    });
     const response = await requestTextPayload(prompt, schedule.llmTimeoutMs);
     const content = response.data?.choices?.[0]?.message?.content || "";
+    logger.debug("llm", "daily kindness response", {
+      content
+    });
     const parsed = extractJsonObject(content);
     if (!parsed || !parsed.copy) {
       throw new GenerationFailedError("模型返回的每日一善文案格式无效。", {

@@ -3,8 +3,11 @@ const config = require("../config");
 const logger = require("../logger");
 const { getCategoriesByIds } = require("../contentCategories");
 
+const CATEGORY_MODEL_TIMEOUT_MS = 45000;
+const CATEGORY_MODEL_MAX_CANDIDATES = 12;
+
 function fallbackMatch(topicCandidates, selectedCategories) {
-  return topicCandidates
+  const matches = topicCandidates
     .map((topic) => {
       const categoryIds = selectedCategories
         .filter((category) =>
@@ -21,48 +24,104 @@ function fallbackMatch(topicCandidates, selectedCategories) {
         : null;
     })
     .filter(Boolean);
+
+  logger.debug("category", "keyword fallback result", {
+    candidateCount: topicCandidates.length,
+    matchedCount: matches.length,
+    matches
+  });
+
+  return matches;
+}
+
+function buildCategoryRetryDelayMs(attempt) {
+  const base = 1200;
+  const jitter = Math.floor(Math.random() * 300);
+  return base * attempt + jitter;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetriableCategoryError(error) {
+  const status = Number(error?.response?.status || 0);
+  const message = String(error?.message || "");
+  return status === 408 || status === 409 || status === 429 || status >= 500 || /timeout/i.test(message);
 }
 
 async function classifyTopicCandidatesWithModel(topicCandidates, selectedCategories) {
+  const candidateTopics = topicCandidates.slice(0, CATEGORY_MODEL_MAX_CANDIDATES);
   const prompt = [
     "你是内容选题助手。请判断下面哪些话题候选属于用户选定的内容板块。",
     "只返回 JSON。",
     `板块列表：${selectedCategories
       .map((category) => `${category.id}:${category.name}(${category.description})`)
       .join("; ")}`,
-    `话题候选：${topicCandidates
-      .map((topic) => `${topic.rank}. ${topic.keyword}[来源:${topic.sourceName || topic.sourceId || "未知"}]`)
+    `话题候选：${candidateTopics
+      .map((topic) => `${topic.rank}. ${topic.keyword}[来源:${topic.sourceName || topic.sourceId || "未知"}]${topic.label ? `[标签:${topic.label}]` : ""}`)
       .join(" | ")}`,
-    '返回结构：{"matches":[{"keyword":"...", "category_ids":["technology"], "reason":"..."}]}',
+    '{"matches":[{"keyword":"...", "category_ids":["technology"], "reason":"..."}]}',
     "规则：",
     "1. 只保留至少命中一个板块的话题",
     "2. category_ids 只能填写板块列表中的 id",
     "3. 如果不确定，不要硬匹配"
   ].join("\n");
 
-  const response = await axios.post(
-    `${config.openai.baseUrl}/chat/completions`,
-    {
-      model: config.openai.textModel,
-      temperature: 1,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: "你只能返回合法 JSON。" },
-        { role: "user", content: prompt }
-      ]
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${config.openai.apiKey}`,
-        "Content-Type": "application/json"
-      },
-      timeout: 45000
-    }
-  );
+  logger.debug("category", "classification prompt", {
+    candidateCount: candidateTopics.length,
+    prompt
+  });
 
-  const content = response.data?.choices?.[0]?.message?.content || "{}";
-  const parsed = JSON.parse(content);
-  return Array.isArray(parsed.matches) ? parsed.matches : [];
+  let lastError;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      const response = await axios.post(
+        `${config.openai.baseUrl}/chat/completions`,
+        {
+          model: config.openai.textModel,
+          temperature: 1,
+          response_format: { type: "json_object" },
+          messages: [
+            { role: "system", content: "你只能返回合法 JSON。" },
+            { role: "user", content: prompt }
+          ]
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${config.openai.apiKey}`,
+            "Content-Type": "application/json"
+          },
+          timeout: CATEGORY_MODEL_TIMEOUT_MS
+        }
+      );
+
+      const content = response.data?.choices?.[0]?.message?.content || "{}";
+      logger.debug("category", "classification response", {
+        attempt,
+        candidateCount: candidateTopics.length,
+        content
+      });
+      const parsed = JSON.parse(content);
+      return Array.isArray(parsed.matches) ? parsed.matches : [];
+    } catch (error) {
+      lastError = error;
+      if (attempt >= 2 || !isRetriableCategoryError(error)) {
+        throw error;
+      }
+      const delayMs = buildCategoryRetryDelayMs(attempt);
+      logger.warn("category", "classification retry scheduled", {
+        attempt,
+        delayMs,
+        candidateCount: candidateTopics.length,
+        error: error.message,
+        status: error.response?.status
+      });
+      await sleep(delayMs);
+    }
+  }
+
+  throw lastError;
 }
 
 async function matchTopicCandidatesToCategories(topicCandidates, categoryIds) {
@@ -80,7 +139,10 @@ async function matchTopicCandidatesToCategories(topicCandidates, categoryIds) {
       matches = await classifyTopicCandidatesWithModel(topicCandidates, selectedCategories);
     } catch (error) {
       logger.warn("category", "model classification failed, fallback to keywords", {
-        error: error.message
+        error: error.message,
+        candidateCount: topicCandidates.length,
+        timeoutMs: CATEGORY_MODEL_TIMEOUT_MS,
+        status: error.response?.status
       });
       matches = fallbackMatch(topicCandidates, selectedCategories);
     }
@@ -109,6 +171,10 @@ async function matchTopicCandidatesToCategories(topicCandidates, categoryIds) {
   logger.info("category", "topic candidate category matching complete", {
     selectedCategoryIds: categoryIds,
     matchedCount: matchedTopics.length
+  });
+  logger.debug("category", "topic candidate category matches", {
+    selectedCategoryIds: categoryIds,
+    matches: Array.from(matchMap.values())
   });
 
   return {

@@ -217,6 +217,17 @@ async function buildTopicContext({ topicSources, topicLimit, schedule }) {
         weiboHotSearchEndRank:
           sourceConfig.id === "weibo_hot_search" ? schedule?.weiboHotSearchEndRank : undefined
       });
+      logger.debug("topics", "topic source topics", {
+        sourceId: sourceConfig.id,
+        priority: sourceConfig.priority,
+        topics: topics.map((topic) => ({
+          rank: topic.rank,
+          keyword: topic.keyword,
+          label: topic.label,
+          sourceName: topic.sourceName,
+          heat: topic.heat
+        }))
+      });
     } catch (error) {
       logger.warn("topics", "topic source fetch failed", {
         sourceId: sourceConfig.id,
@@ -233,6 +244,16 @@ async function buildTopicContext({ topicSources, topicLimit, schedule }) {
   }
 
   const topics = mergeTopicCandidates(sourceRuns);
+  logger.debug("topics", "merged topic candidates", {
+    count: topics.length,
+    topics: topics.map((topic) => ({
+      rank: topic.rank,
+      keyword: topic.keyword,
+      label: topic.label,
+      sourceId: topic.sourceId,
+      sourceName: topic.sourceName
+    }))
+  });
   const contextTopics = topics.slice(0, Math.min(topics.length, MAX_CONTEXT_TOPICS));
 
   const contexts = await Promise.all(
