@@ -17,8 +17,12 @@ const DEFAULT_SCHEDULE = {
   generateLeadMinutes: 10,
   reminderLeadMinutes: 5,
   hotSearchCount: 20,
+  googleNewsTopicCount: 10,
   weiboHotSearchStartRank: 1,
   weiboHotSearchEndRank: 20,
+  notificationPushEnabled: true,
+  copyMinLength: 200,
+  copyMaxLength: 500,
   llmTimeoutMs: config.openai.requestTimeoutMs,
   imageWidth: config.openai.imageWidth,
   imageHeight: config.openai.imageHeight,
@@ -60,6 +64,10 @@ function normalizeSchedule(input = {}) {
     DEFAULT_SCHEDULE.reminderLeadMinutes
   );
   const hotSearchCount = parseInteger(input.hotSearchCount, DEFAULT_SCHEDULE.hotSearchCount);
+  const googleNewsTopicCount = parseInteger(
+    input.googleNewsTopicCount,
+    DEFAULT_SCHEDULE.googleNewsTopicCount
+  );
   const weiboHotSearchStartRank = parseInteger(
     input.weiboHotSearchStartRank,
     DEFAULT_SCHEDULE.weiboHotSearchStartRank
@@ -68,6 +76,12 @@ function normalizeSchedule(input = {}) {
     input.weiboHotSearchEndRank,
     DEFAULT_SCHEDULE.weiboHotSearchEndRank
   );
+  const notificationPushEnabled =
+    input.notificationPushEnabled === undefined
+      ? DEFAULT_SCHEDULE.notificationPushEnabled
+      : Boolean(input.notificationPushEnabled);
+  const copyMinLength = parseInteger(input.copyMinLength, DEFAULT_SCHEDULE.copyMinLength);
+  const copyMaxLength = parseInteger(input.copyMaxLength, DEFAULT_SCHEDULE.copyMaxLength);
   const llmTimeoutMs = parseInteger(input.llmTimeoutMs, DEFAULT_SCHEDULE.llmTimeoutMs);
   const imageWidth = parseInteger(input.imageWidth, DEFAULT_SCHEDULE.imageWidth);
   const imageHeight = parseInteger(input.imageHeight, DEFAULT_SCHEDULE.imageHeight);
@@ -97,6 +111,9 @@ function normalizeSchedule(input = {}) {
   if (hotSearchCount < 5 || hotSearchCount > 30) {
     throw new Error("hotSearchCount must be between 5 and 30.");
   }
+  if (googleNewsTopicCount < 1 || googleNewsTopicCount > 30) {
+    throw new Error("googleNewsTopicCount must be between 1 and 30.");
+  }
   if (weiboHotSearchStartRank < 1 || weiboHotSearchStartRank > 50) {
     throw new Error("weiboHotSearchStartRank must be between 1 and 50.");
   }
@@ -105,6 +122,15 @@ function normalizeSchedule(input = {}) {
   }
   if (weiboHotSearchEndRank < weiboHotSearchStartRank) {
     throw new Error("weiboHotSearchEndRank must be greater than or equal to weiboHotSearchStartRank.");
+  }
+  if (copyMinLength < 50 || copyMinLength > 1000) {
+    throw new Error("copyMinLength must be between 50 and 1000.");
+  }
+  if (copyMaxLength < 50 || copyMaxLength > 1000) {
+    throw new Error("copyMaxLength must be between 50 and 1000.");
+  }
+  if (copyMaxLength < copyMinLength) {
+    throw new Error("copyMaxLength must be greater than or equal to copyMinLength.");
   }
   if (llmTimeoutMs < 10000 || llmTimeoutMs > 180000) {
     throw new Error("llmTimeoutMs must be between 10000 and 180000.");
@@ -128,8 +154,12 @@ function normalizeSchedule(input = {}) {
     generateLeadMinutes,
     reminderLeadMinutes,
     hotSearchCount,
+    googleNewsTopicCount,
     weiboHotSearchStartRank,
     weiboHotSearchEndRank,
+    notificationPushEnabled,
+    copyMinLength,
+    copyMaxLength,
     llmTimeoutMs,
     imageWidth,
     imageHeight,

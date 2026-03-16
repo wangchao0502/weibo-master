@@ -3,6 +3,7 @@ const config = require("../config");
 const { getDb } = require("../db");
 const { now } = require("../time");
 const logger = require("../logger");
+const { getScheduleSettings } = require("./settingsService");
 
 async function postWebhook(payload) {
   if (!config.reminderWebhookUrl) {
@@ -35,7 +36,10 @@ async function createNotification({
     [type, draftId, message, ts]
   );
 
-  if (sendWebhook && config.reminderWebhookUrl) {
+  const schedule = await getScheduleSettings();
+  const shouldPush = sendWebhook && config.reminderWebhookUrl && schedule.notificationPushEnabled !== false;
+
+  if (shouldPush) {
     try {
       await postWebhook({
         type,

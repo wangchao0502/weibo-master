@@ -27,6 +27,9 @@ const dom = {
   generateLeadMinutes: document.getElementById("generateLeadMinutes"),
   reminderLeadMinutes: document.getElementById("reminderLeadMinutes"),
   hotSearchCount: document.getElementById("hotSearchCount"),
+  notificationPushEnabled: document.getElementById("notificationPushEnabled"),
+  copyMinLength: document.getElementById("copyMinLength"),
+  copyMaxLength: document.getElementById("copyMaxLength"),
   llmTimeoutMs: document.getElementById("llmTimeoutMs"),
   imageWidth: document.getElementById("imageWidth"),
   imageHeight: document.getElementById("imageHeight"),
@@ -197,9 +200,9 @@ function renderTopicSourceSelector(availableSources, selectedSources, schedule) 
       const selected = sourceMap.get(source.id) || {};
       const enabled = selected.enabled === undefined ? true : Boolean(selected.enabled);
       const priority = Number(selected.priority || source.defaultPriority || 99);
-      const extraSettings =
-        source.id === "weibo_hot_search"
-          ? `
+      let extraSettings = "";
+      if (source.id === "weibo_hot_search") {
+        extraSettings = `
             <div class="topic-source-extra">
               <div class="topic-source-extra-title">热搜范围</div>
               <div class="topic-source-range">
@@ -214,8 +217,21 @@ function renderTopicSourceSelector(availableSources, selectedSources, schedule) 
               </div>
               <div class="topic-source-extra-hint">例如设置 20-30，则只从微博热搜第 20 到第 30 名取候选。</div>
             </div>
-          `
-          : "";
+          `;
+      } else if (source.id === "google_news_cn") {
+        extraSettings = `
+            <div class="topic-source-extra">
+              <div class="topic-source-extra-title">Google 热点候选数</div>
+              <div class="topic-source-range">
+                <label class="topic-source-range-field">
+                  <span>候选条数</span>
+                  <input type="number" min="1" max="30" value="${Number(schedule?.googleNewsTopicCount || 10)}" data-role="google-news-topic-count" />
+                </label>
+              </div>
+              <div class="topic-source-extra-hint">默认 10 条，仅作用于 Google 新闻热点来源。</div>
+            </div>
+          `;
+      }
       return `
         <label class="topic-source-option">
           <div class="topic-source-main">
@@ -271,6 +287,11 @@ function getWeiboHotSearchRange() {
     weiboHotSearchStartRank: startInput ? Number(startInput.value) : 1,
     weiboHotSearchEndRank: endInput ? Number(endInput.value) : 20
   };
+}
+
+function getGoogleNewsTopicCount() {
+  const countInput = dom.topicSourceSelector.querySelector('[data-role="google-news-topic-count"]');
+  return countInput ? Number(countInput.value) : 10;
 }
 
 function renderAccountCard(account) {
@@ -340,6 +361,9 @@ function renderSchedule(schedule, nextSlot, availableCategories, availableTopicS
   dom.generateLeadMinutes.value = schedule.generateLeadMinutes;
   dom.reminderLeadMinutes.value = schedule.reminderLeadMinutes;
   dom.hotSearchCount.value = schedule.hotSearchCount;
+  dom.notificationPushEnabled.checked = Boolean(schedule.notificationPushEnabled);
+  dom.copyMinLength.value = schedule.copyMinLength;
+  dom.copyMaxLength.value = schedule.copyMaxLength;
   dom.llmTimeoutMs.value = schedule.llmTimeoutMs;
   dom.imageWidth.value = schedule.imageWidth;
   dom.imageHeight.value = schedule.imageHeight;
@@ -598,6 +622,7 @@ async function loadSchedule() {
 
 async function saveSchedule() {
   const weiboRange = getWeiboHotSearchRange();
+  const googleNewsTopicCount = getGoogleNewsTopicCount();
   const payload = {
     enabled: dom.scheduleEnabled.checked,
     publishStartHour: Number(dom.publishStartHour.value),
@@ -605,6 +630,10 @@ async function saveSchedule() {
     generateLeadMinutes: Number(dom.generateLeadMinutes.value),
     reminderLeadMinutes: Number(dom.reminderLeadMinutes.value),
     hotSearchCount: Number(dom.hotSearchCount.value),
+    notificationPushEnabled: dom.notificationPushEnabled.checked,
+    copyMinLength: Number(dom.copyMinLength.value),
+    copyMaxLength: Number(dom.copyMaxLength.value),
+    googleNewsTopicCount,
     weiboHotSearchStartRank: weiboRange.weiboHotSearchStartRank,
     weiboHotSearchEndRank: weiboRange.weiboHotSearchEndRank,
     llmTimeoutMs: Number(dom.llmTimeoutMs.value),

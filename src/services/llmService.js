@@ -66,17 +66,28 @@ function buildSourceSummary(strategy) {
     .join("；");
 }
 
-function parseModelPayload(parsed, contextLabel = "微博草稿") {
+function buildCopyLengthHint(schedule) {
+  return `${schedule.copyMinLength}-${schedule.copyMaxLength}`;
+}
+
+function parseModelPayload(parsed, contextLabel = "微博草稿", options = {}) {
   if (!parsed || !parsed.copy) {
     throw new GenerationFailedError(`模型返回${contextLabel}格式无效，无法继续。`, {
       code: "invalid_model_payload"
     });
   }
 
+  const minCopyLength = Number.isInteger(options.minCopyLength) ? options.minCopyLength : 60;
+  const maxCopyLength = Number.isInteger(options.maxCopyLength) ? options.maxCopyLength : null;
   const copy = normalizeInlineText(parsed.copy || "");
-  if (copy.length < 60) {
-    throw new GenerationFailedError(`模型返回${contextLabel}过短，已放弃本次生成。`, {
+  if (copy.length < minCopyLength) {
+    throw new GenerationFailedError(`模型返回${contextLabel}过短，未达到 ${minCopyLength} 字要求。`, {
       code: "copy_too_short"
+    });
+  }
+  if (maxCopyLength && copy.length > maxCopyLength) {
+    throw new GenerationFailedError(`模型返回${contextLabel}过长，超过 ${maxCopyLength} 字限制。`, {
+      code: "copy_too_long"
     });
   }
 
@@ -257,7 +268,7 @@ async function decideGenerationStrategy(schedule) {
   };
 }
 
-function buildPrompt(slotTime, strategy) {
+function buildPrompt(slotTime, strategy, schedule) {
   const categoriesLine = strategy.selectedCategories.length
     ? strategy.selectedCategories.map((item) => `${item.name}(${item.description})`).join("；")
     : "未限制板块";
@@ -283,7 +294,7 @@ function buildPrompt(slotTime, strategy) {
       `返回 JSON，结构为：${schema}`,
       "要求：",
       "1. topic 字段写你最终选择的板块或核心话题",
-      "2. 文案 140-240 个中文字符",
+      `2. 文案控制在 ${buildCopyLengthHint(schedule)} 个中文字符`,
       "3. 必须体现“正在发生”或“值得马上关注”的时效性",
       "4. 不要编造事实，信息不足时用保守措辞",
       "5. 带 1-2 个相关话题标签，不要堆砌"
@@ -326,7 +337,7 @@ function buildPrompt(slotTime, strategy) {
     `返回 JSON，结构为：${schema}`,
     "要求：",
     "1. topic 字段必须写你最终采用的话题词",
-    "2. 文案控制在 140-240 个中文字符，适合微博发布",
+    `2. 文案控制在 ${buildCopyLengthHint(schedule)} 个中文字符，适合微博发布`,
     "3. 不能只是复述标题，要有观点或信息增量",
     "4. 不要编造事实；上下文不足时使用保守措辞",
     "5. 带 1-2 个相关话题标签，不要堆砌",
@@ -335,7 +346,7 @@ function buildPrompt(slotTime, strategy) {
   ].join("\n\n");
 }
 
-async function generateTextPayload(slotTime, strategy, timeoutMs) {
+async function generateTextPayload(slotTime, strategy, timeoutMs, schedule) {
   if (!config.openai.apiKey) {
     throw new GenerationFailedError("未配置大模型接口，无法生成微博内容。", {
       code: "missing_api_key",
@@ -343,11 +354,11 @@ async function generateTextPayload(slotTime, strategy, timeoutMs) {
     });
   }
 
-  const prompt = buildPrompt(slotTime, strategy);
+  const prompt = buildPrompt(slotTime, strategy, schedule);
   const response = await requestTextPayload(prompt, timeoutMs);
   const content = response.data?.choices?.[0]?.message?.content || "";
   const parsed = extractJsonObject(content);
-  return parseModelPayload(parsed, "微博草稿");
+  return parseModelPayload(parsed, "微博草稿", { minCopyLength: schedule.copyMinLength, maxCopyLength: schedule.copyMaxLength });
 }
 
 async function generateImages({ copy, imageCount, imagePrompts, timeoutMs, imageWidth, imageHeight }) {
@@ -435,6 +446,7 @@ async function generateImages({ copy, imageCount, imagePrompts, timeoutMs, image
 
 function buildRefinePrompt(draft, suggestion, options = {}) {
   const refineImages = Boolean(options.refineImages);
+  const schedule = options.schedule || { copyMinLength: 200, copyMaxLength: 500 };
   const schema = refineImages && config.openai.imageModel
     ? '{"topic":"...", "copy":"...", "image_count":1-6, "image_prompts":["...", "..."]}'
     : '{"topic":"...", "copy":"..."}';
@@ -454,7 +466,7 @@ function buildRefinePrompt(draft, suggestion, options = {}) {
     "要求：",
     "1. 必须严格吸收用户建议，直接给出新的微博正文，不要解释过程",
     "2. 保留与原草稿一致的核心话题方向，除非用户明确要求改题",
-    "3. 文案控制在 140-240 个中文字符，适合微博发布",
+    `3. 文案控制在 ${buildCopyLengthHint(schedule)} 个中文字符，适合微博发布`,
     "4. 不要出现类似【时间】来源、生成说明、提示词说明这类脏内容",
     "5. 不要编造事实；信息不确定时用保守措辞",
     "6. 带 1-2 个相关话题标签，不要堆砌",
@@ -480,11 +492,11 @@ async function generateRefinedDraftPayload({ draft, suggestion, refineImages = f
       });
     }
 
-    const prompt = buildRefinePrompt(draft, suggestion, { refineImages });
+    const prompt = buildRefinePrompt(draft, suggestion, { refineImages, schedule });
     const response = await requestTextPayload(prompt, schedule.llmTimeoutMs);
     const content = response.data?.choices?.[0]?.message?.content || "";
     const parsed = extractJsonObject(content);
-    const textPayload = parseModelPayload(parsed, "润色后的微博正文");
+    const textPayload = parseModelPayload(parsed, "润色后的微博正文", { minCopyLength: schedule.copyMinLength, maxCopyLength: schedule.copyMaxLength });
 
     let imageUrls = [];
     if (refineImages && config.openai.imageModel) {
@@ -549,7 +561,7 @@ async function generateDraftPayload(slotTime) {
   }
 
   try {
-    const textPayload = await generateTextPayload(slotTime, strategy, schedule.llmTimeoutMs);
+    const textPayload = await generateTextPayload(slotTime, strategy, schedule.llmTimeoutMs, schedule);
 
     let imageUrls = [];
     if (config.openai.imageModel) {

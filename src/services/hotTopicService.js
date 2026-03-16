@@ -171,7 +171,7 @@ async function fetchTopicsBySource(sourceId, count, schedule) {
     return fetchZhihuHotTopics(count);
   }
   if (sourceId === "google_news_cn") {
-    return fetchGoogleNewsTopics(count);
+    return fetchGoogleNewsTopics(schedule.googleNewsTopicCount || count);
   }
   throw new Error(`unsupported topic source: ${sourceId}`);
 }

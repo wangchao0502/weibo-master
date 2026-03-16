@@ -177,6 +177,18 @@
                   <span>单源抓取条数</span>
                   <input id="hotSearchCount" type="number" min="5" max="30" />
                 </label>
+                <label class="field checkbox-field">
+                  <span>启用消息推送</span>
+                  <input id="notificationPushEnabled" type="checkbox" />
+                </label>
+                <label class="field">
+                  <span>正文最小字数</span>
+                  <input id="copyMinLength" type="number" min="50" max="1000" step="10" />
+                </label>
+                <label class="field">
+                  <span>正文最大字数</span>
+                  <input id="copyMaxLength" type="number" min="50" max="1000" step="10" />
+                </label>
                 <label class="field">
                   <span>模型超时(ms)</span>
                   <input id="llmTimeoutMs" type="number" min="10000" max="180000" step="5000" />
