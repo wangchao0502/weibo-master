@@ -10,6 +10,101 @@ const {
   getTopicSourceById
 } = require("../topicSources");
 
+
+const DEFAULT_MODEL_SETTINGS = {
+  textApiKey: config.openai.apiKey,
+  textBaseUrl: config.openai.baseUrl,
+  textModel: config.openai.textModel,
+  imageApiKey: process.env.OPENAI_IMAGE_API_KEY !== undefined
+    ? process.env.OPENAI_IMAGE_API_KEY
+    : config.openai.imageApiKey,
+  imageBaseUrl: process.env.OPENAI_IMAGE_BASE_URL !== undefined
+    ? process.env.OPENAI_IMAGE_BASE_URL
+    : config.openai.imageBaseUrl,
+  imageProtocol: config.openai.imageProtocol,
+  imageModel: process.env.OPENAI_IMAGE_MODEL === undefined ? "gpt-image-1" : (process.env.OPENAI_IMAGE_MODEL || "")
+};
+
+function normalizeModelSettings(input = {}) {
+  const textApiKey = String(
+    input.textApiKey === undefined ? DEFAULT_MODEL_SETTINGS.textApiKey : input.textApiKey
+  ).trim();
+  const textBaseUrl = String(
+    input.textBaseUrl === undefined ? DEFAULT_MODEL_SETTINGS.textBaseUrl : input.textBaseUrl
+  ).trim();
+  const textModel = String(
+    input.textModel === undefined ? DEFAULT_MODEL_SETTINGS.textModel : input.textModel
+  ).trim();
+  const imageApiKey = String(
+    input.imageApiKey === undefined ? DEFAULT_MODEL_SETTINGS.imageApiKey : input.imageApiKey
+  ).trim();
+  const imageBaseUrl = String(
+    input.imageBaseUrl === undefined ? DEFAULT_MODEL_SETTINGS.imageBaseUrl : input.imageBaseUrl
+  ).trim();
+  const imageProtocol = String(
+    input.imageProtocol === undefined ? DEFAULT_MODEL_SETTINGS.imageProtocol : input.imageProtocol
+  ).trim().toLowerCase() || "openai";
+  const imageModel = String(
+    input.imageModel === undefined ? DEFAULT_MODEL_SETTINGS.imageModel : input.imageModel
+  ).trim();
+
+  if (textBaseUrl && !/^https?:\/\//i.test(textBaseUrl)) {
+    throw new Error("textBaseUrl must start with http:// or https://.");
+  }
+  if (imageBaseUrl && !/^https?:\/\//i.test(imageBaseUrl)) {
+    throw new Error("imageBaseUrl must start with http:// or https://.");
+  }
+  if (!["openai", "dashscope"].includes(imageProtocol)) {
+    throw new Error("imageProtocol must be one of: openai, dashscope.");
+  }
+
+  return {
+    textApiKey,
+    textBaseUrl,
+    textModel,
+    imageApiKey,
+    imageBaseUrl,
+    imageProtocol,
+    imageModel
+  };
+}
+
+function buildEffectiveModelSettings(input = {}) {
+  const normalized = normalizeModelSettings(input);
+  const textApiKey = normalized.textApiKey || DEFAULT_MODEL_SETTINGS.textApiKey || "";
+  const textBaseUrl = normalized.textBaseUrl || DEFAULT_MODEL_SETTINGS.textBaseUrl || "https://api.openai.com/v1";
+  const textModel = normalized.textModel || DEFAULT_MODEL_SETTINGS.textModel || "gpt-4o-mini";
+  const imageProtocol = normalized.imageProtocol || DEFAULT_MODEL_SETTINGS.imageProtocol || "openai";
+  const imageApiKey = normalized.imageApiKey || textApiKey;
+  const imageBaseUrl = normalized.imageBaseUrl || (imageProtocol === "dashscope"
+    ? "https://dashscope.aliyuncs.com/api/v1"
+    : textBaseUrl);
+  const imageModel = normalized.imageModel;
+
+  return {
+    textApiKey,
+    textBaseUrl,
+    textModel,
+    imageApiKey,
+    imageBaseUrl,
+    imageProtocol,
+    imageModel
+  };
+}
+
+
+function applyModelSettingsToRuntime(modelSettings) {
+  const effective = buildEffectiveModelSettings(modelSettings);
+  config.openai.apiKey = effective.textApiKey;
+  config.openai.baseUrl = effective.textBaseUrl;
+  config.openai.textModel = effective.textModel;
+  config.openai.imageApiKey = effective.imageApiKey;
+  config.openai.imageBaseUrl = effective.imageBaseUrl;
+  config.openai.imageProtocol = effective.imageProtocol;
+  config.openai.imageModel = effective.imageModel;
+  return effective;
+}
+
 const DEFAULT_SCHEDULE = {
   enabled: true,
   publishStartHour: 8,
@@ -26,6 +121,7 @@ const DEFAULT_SCHEDULE = {
   llmTimeoutMs: config.openai.requestTimeoutMs,
   imageWidth: config.openai.imageWidth,
   imageHeight: config.openai.imageHeight,
+  maxImageCount: 3,
   contentCategoryIds: [],
   topicSources: getDefaultTopicSourceConfigs()
 };
@@ -85,6 +181,7 @@ function normalizeSchedule(input = {}) {
   const llmTimeoutMs = parseInteger(input.llmTimeoutMs, DEFAULT_SCHEDULE.llmTimeoutMs);
   const imageWidth = parseInteger(input.imageWidth, DEFAULT_SCHEDULE.imageWidth);
   const imageHeight = parseInteger(input.imageHeight, DEFAULT_SCHEDULE.imageHeight);
+  const maxImageCount = parseInteger(input.maxImageCount, DEFAULT_SCHEDULE.maxImageCount);
   const contentCategoryIds = Array.isArray(input.contentCategoryIds)
     ? Array.from(new Set(input.contentCategoryIds.map((item) => String(item))))
     : DEFAULT_SCHEDULE.contentCategoryIds;
@@ -141,6 +238,9 @@ function normalizeSchedule(input = {}) {
   if (imageHeight < 256 || imageHeight > 2048) {
     throw new Error("imageHeight must be between 256 and 2048.");
   }
+  if (maxImageCount < 1 || maxImageCount > 9) {
+    throw new Error("maxImageCount must be between 1 and 9.");
+  }
   if (getCategoriesByIds(contentCategoryIds).length !== contentCategoryIds.length) {
     throw new Error("contentCategoryIds contains unknown category id.");
   }
@@ -163,6 +263,7 @@ function normalizeSchedule(input = {}) {
     llmTimeoutMs,
     imageWidth,
     imageHeight,
+    maxImageCount,
     contentCategoryIds,
     topicSources
   };
@@ -179,6 +280,53 @@ async function getScheduleSettings() {
   } catch (_) {
     return DEFAULT_SCHEDULE;
   }
+}
+
+
+async function getModelSettings() {
+  const db = await getDb();
+  const row = await db.get(`SELECT value FROM system_settings WHERE key = 'model_settings'`);
+  if (!row) {
+    const modelSettings = normalizeModelSettings(DEFAULT_MODEL_SETTINGS);
+    applyModelSettingsToRuntime(modelSettings);
+    return modelSettings;
+  }
+  try {
+    const modelSettings = normalizeModelSettings(JSON.parse(row.value));
+    applyModelSettingsToRuntime(modelSettings);
+    return modelSettings;
+  } catch (_) {
+    const modelSettings = normalizeModelSettings(DEFAULT_MODEL_SETTINGS);
+    applyModelSettingsToRuntime(modelSettings);
+    return modelSettings;
+  }
+}
+
+async function getEffectiveModelSettings() {
+  return applyModelSettingsToRuntime(await getModelSettings());
+}
+
+async function updateModelSettings(input) {
+  const db = await getDb();
+  const modelSettings = normalizeModelSettings(input);
+  applyModelSettingsToRuntime(modelSettings);
+  const ts = now().format();
+  await db.run(
+    `INSERT INTO system_settings (key, value, updated_at)
+     VALUES ('model_settings', ?, ?)
+     ON CONFLICT(key) DO UPDATE SET
+       value = excluded.value,
+       updated_at = excluded.updated_at`,
+    [JSON.stringify(modelSettings), ts]
+  );
+  logger.info("settings", "model settings updated", {
+    textBaseUrl: modelSettings.textBaseUrl,
+    textModel: modelSettings.textModel,
+    imageBaseUrl: modelSettings.imageBaseUrl,
+    imageProtocol: modelSettings.imageProtocol,
+    imageModel: modelSettings.imageModel
+  });
+  return modelSettings;
 }
 
 async function updateScheduleSettings(input) {
@@ -227,11 +375,18 @@ async function getNextManagedPublishSlot(baseTime = now()) {
 
 module.exports = {
   DEFAULT_SCHEDULE,
+  DEFAULT_MODEL_SETTINGS,
   COMMON_CATEGORIES,
   TOPIC_SOURCES,
   normalizeSchedule,
+  normalizeModelSettings,
+  buildEffectiveModelSettings,
+  applyModelSettingsToRuntime,
   getScheduleSettings,
+  getModelSettings,
+  getEffectiveModelSettings,
   updateScheduleSettings,
+  updateModelSettings,
   isManagedPublishSlot,
   getTriggeredPublishSlot,
   getNextManagedPublishSlot

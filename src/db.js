@@ -148,12 +148,35 @@ async function initSchema(db) {
         llmTimeoutMs: 60000,
         imageWidth: 1024,
         imageHeight: 1024,
+        maxImageCount: 3,
         contentCategoryIds: [],
         topicSources: [
           { id: "weibo_hot_search", enabled: true, priority: 10 },
           { id: "zhihu_hot", enabled: true, priority: 20 },
           { id: "google_news_cn", enabled: true, priority: 30 }
         ]
+      }),
+      ts
+    ]
+  );
+
+  await db.run(
+    `INSERT INTO system_settings (key, value, updated_at)
+     SELECT 'model_settings', ?, ?
+     WHERE NOT EXISTS (SELECT 1 FROM system_settings WHERE key = 'model_settings')`,
+    [
+      JSON.stringify({
+        textApiKey: config.openai.apiKey,
+        textBaseUrl: config.openai.baseUrl,
+        textModel: config.openai.textModel,
+        imageApiKey: process.env.OPENAI_IMAGE_API_KEY !== undefined
+          ? process.env.OPENAI_IMAGE_API_KEY
+          : config.openai.imageApiKey,
+        imageBaseUrl: process.env.OPENAI_IMAGE_BASE_URL !== undefined
+          ? process.env.OPENAI_IMAGE_BASE_URL
+          : config.openai.imageBaseUrl,
+        imageProtocol: config.openai.imageProtocol,
+        imageModel: process.env.OPENAI_IMAGE_MODEL === undefined ? 'gpt-image-1' : (process.env.OPENAI_IMAGE_MODEL || '')
       }),
       ts
     ]

@@ -4,12 +4,14 @@ const config = require("./config");
 process.env.TZ = config.timezone;
 
 const { getDb } = require("./db");
+const { getEffectiveModelSettings } = require("./services/settingsService");
 const { createApp } = require("./app");
 const { startScheduler } = require("./scheduler");
 const logger = require("./logger");
 
 async function main() {
   await getDb();
+  await getEffectiveModelSettings();
   const app = createApp();
   app.listen(config.port, () => {
     logger.info("server", "server listening", {

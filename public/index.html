@@ -201,6 +201,10 @@
                   <span>图片高度(px)</span>
                   <input id="imageHeight" type="number" min="256" max="2048" step="64" />
                 </label>
+                <label class="field">
+                  <span>最多生成图片数</span>
+                  <input id="maxImageCount" type="number" min="1" max="9" />
+                </label>
               </div>
               <div class="field">
                 <span>内容板块</span>
@@ -214,6 +218,56 @@
               <div class="hint">
                 如果多来源候选里有命中你所选板块的话题，则优先使用高优先级来源；如果没有，再按板块自由发挥。
               </div>
+            </section>
+
+
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2>模型配置</h2>
+                  <div class="hint">页面保存后会持久化到本地数据库，并覆盖运行中的模型配置。</div>
+                </div>
+                <div class="actions">
+                  <button id="btnSaveModelSettings">保存模型配置</button>
+                  <button id="btnCheckTextModel" class="secondary">检查文本模型</button>
+                  <button id="btnCheckImageModel" class="secondary">检查图片模型</button>
+                </div>
+              </div>
+              <div class="form-grid">
+                <label class="field">
+                  <span>文本模型 API Key</span>
+                  <input id="textApiKey" type="password" autocomplete="off" />
+                </label>
+                <label class="field">
+                  <span>文本模型 Base URL</span>
+                  <input id="textBaseUrl" type="text" placeholder="https://api.openai.com/v1" />
+                </label>
+                <label class="field">
+                  <span>文本模型名称</span>
+                  <input id="textModel" type="text" placeholder="gpt-4o-mini" />
+                </label>
+                <label class="field">
+                  <span>图片协议</span>
+                  <select id="imageProtocol">
+                    <option value="openai">openai</option>
+                    <option value="dashscope">dashscope</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>图片模型 API Key</span>
+                  <input id="imageApiKey" type="password" autocomplete="off" />
+                </label>
+                <label class="field">
+                  <span>图片模型 Base URL</span>
+                  <input id="imageBaseUrl" type="text" placeholder="https://api.openai.com/v1" />
+                </label>
+                <label class="field">
+                  <span>图片模型名称</span>
+                  <input id="imageModel" type="text" placeholder="gpt-image-1 / qwen-image-2.0" />
+                </label>
+              </div>
+              <div class="hint">图片模型留空则不生成图片；图片 API Key / Base URL 留空时，会回退复用文本模型配置。</div>
+              <div id="modelCheckStatus" class="hint">模型检查状态：未检查</div>
             </section>
           </section>
 

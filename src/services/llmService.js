@@ -1,7 +1,7 @@
 const axios = require("axios");
 const config = require("../config");
 const { now } = require("../time");
-const { getScheduleSettings } = require("./settingsService");
+const { getScheduleSettings, buildEffectiveModelSettings } = require("./settingsService");
 const { buildTopicContext, buildCategoryNewsContext } = require("./hotTopicService");
 const { matchTopicCandidatesToCategories } = require("./categoryService");
 const { getCategoriesByIds } = require("../contentCategories");
@@ -57,6 +57,143 @@ function formatNewsLines(news = []) {
     .join("\n");
 }
 
+
+function normalizeCheckModelSettings(modelSettingsInput = {}) {
+  const effective = buildEffectiveModelSettings(modelSettingsInput);
+  return {
+    textApiKey: effective.textApiKey,
+    textBaseUrl: effective.textBaseUrl,
+    textModel: effective.textModel,
+    imageApiKey: effective.imageApiKey,
+    imageBaseUrl: effective.imageBaseUrl,
+    imageProtocol: effective.imageProtocol,
+    imageModel: effective.imageModel
+  };
+}
+
+async function checkTextModelAvailability(modelSettingsInput = {}) {
+  const modelSettings = normalizeCheckModelSettings(modelSettingsInput);
+  if (!modelSettings.textApiKey || !modelSettings.textModel || !modelSettings.textBaseUrl) {
+    throw new GenerationFailedError("文本模型配置不完整，无法检查可用性。", {
+      code: "missing_text_model_config",
+      retryable: false
+    });
+  }
+
+  const response = await axios.post(
+    `${modelSettings.textBaseUrl}/chat/completions`,
+    {
+      model: modelSettings.textModel,
+      messages: [
+        { role: "system", content: "Reply with OK only." },
+        { role: "user", content: "ping" }
+      ],
+      max_tokens: 8
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${modelSettings.textApiKey}`,
+        "Content-Type": "application/json"
+      },
+      timeout: 20000
+    }
+  );
+
+  return {
+    available: true,
+    provider: modelSettings.textBaseUrl,
+    model: modelSettings.textModel,
+    content: response.data?.choices?.[0]?.message?.content || ""
+  };
+}
+
+async function checkImageModelAvailability(modelSettingsInput = {}) {
+  const modelSettings = normalizeCheckModelSettings(modelSettingsInput);
+  if (!modelSettings.imageApiKey || !modelSettings.imageModel || !modelSettings.imageBaseUrl) {
+    throw new GenerationFailedError("图片模型配置不完整，无法检查可用性。", {
+      code: "missing_image_model_config",
+      retryable: false
+    });
+  }
+
+  if (String(modelSettings.imageProtocol || "openai").toLowerCase() === "dashscope") {
+    const response = await axios.post(
+      `${modelSettings.imageBaseUrl}/services/aigc/multimodal-generation/generation`,
+      {
+        model: modelSettings.imageModel,
+        input: {
+          messages: [
+            {
+              role: "user",
+              content: [{ text: "生成一张极简抽象测试图片，白底，单个几何图形。" }]
+            }
+          ]
+        },
+        parameters: {
+          size: "512*512",
+          n: 1,
+          prompt_extend: true,
+          watermark: false,
+          negative_prompt: " "
+        }
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${modelSettings.imageApiKey}`,
+          "Content-Type": "application/json"
+        },
+        timeout: 30000
+      }
+    );
+
+    const contentItems = response.data?.output?.choices?.[0]?.message?.content || [];
+    const hasImage = contentItems.some((item) => item.image || item.url || item.image_url);
+    if (!hasImage) {
+      throw new GenerationFailedError("图片模型检查未返回有效图片。", {
+        code: "image_check_failed"
+      });
+    }
+
+    return {
+      available: true,
+      protocol: modelSettings.imageProtocol,
+      provider: modelSettings.imageBaseUrl,
+      model: modelSettings.imageModel
+    };
+  }
+
+  const response = await axios.post(
+    `${modelSettings.imageBaseUrl}/images/generations`,
+    {
+      model: modelSettings.imageModel,
+      prompt: "A minimal abstract test image on white background with one geometric shape.",
+      n: 1,
+      size: "512x512"
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${modelSettings.imageApiKey}`,
+        "Content-Type": "application/json"
+      },
+      timeout: 30000
+    }
+  );
+
+  const hasImage = Array.isArray(response.data?.data) && response.data.data.some((item) => item.url || item.b64_json);
+  if (!hasImage) {
+    throw new GenerationFailedError("图片模型检查未返回有效图片。", {
+      code: "image_check_failed"
+    });
+  }
+
+  return {
+    available: true,
+    protocol: modelSettings.imageProtocol,
+    provider: modelSettings.imageBaseUrl,
+    model: modelSettings.imageModel
+  };
+}
+
 function buildSourceSummary(strategy) {
   if (!strategy.sourceRuns?.length) {
     return "未启用话题来源";
@@ -94,9 +231,9 @@ function parseModelPayload(parsed, contextLabel = "微博草稿", options = {}) 
   return {
     topic: normalizeInlineText(parsed.topic || ""),
     copy,
-    imageCount: clamp(Number(parsed.image_count || 1), 1, 6),
+    imageCount: clamp(Number(parsed.image_count || 1), 1, 9),
     imagePrompts: Array.isArray(parsed.image_prompts)
-      ? parsed.image_prompts.map((item) => normalizeInlineText(item)).filter(Boolean).slice(0, 6)
+      ? parsed.image_prompts.map((item) => normalizeInlineText(item)).filter(Boolean).slice(0, 9)
       : []
   };
 }
@@ -141,6 +278,47 @@ function toGenerationError(error, fallbackMessage) {
     code: "generation_failed",
     causeMessage: error?.message || fallbackMessage
   });
+}
+
+
+function buildImageRetryDelayMs(attempt) {
+  const base = 1500;
+  const jitter = Math.floor(Math.random() * 400);
+  return base * (2 ** Math.max(0, attempt - 1)) + jitter;
+}
+
+function isRetriableImageError(error) {
+  const status = Number(error?.response?.status || 0);
+  if (isTimeoutError(error)) {
+    return true;
+  }
+  return status === 408 || status === 409 || status === 429 || status >= 500;
+}
+
+async function withImageRetry(task, meta = {}) {
+  const maxAttempts = 3;
+  let lastError;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await task();
+    } catch (error) {
+      lastError = error;
+      if (!isRetriableImageError(error) || attempt >= maxAttempts) {
+        throw error;
+      }
+      const delayMs = buildImageRetryDelayMs(attempt);
+      logger.warn("llm", "image request retry scheduled", {
+        attempt,
+        maxAttempts,
+        delayMs,
+        status: error.response?.status,
+        error: error.message,
+        ...meta
+      });
+      await sleep(delayMs);
+    }
+  }
+  throw lastError;
 }
 
 function getImageProtocol() {
@@ -274,7 +452,7 @@ function buildPrompt(slotTime, strategy, schedule) {
     : "未限制板块";
   const sourceLine = buildSourceSummary(strategy);
   const schema = config.openai.imageModel
-    ? '{"topic":"...", "copy":"...", "image_count":1-6, "image_prompts":["...", "..."]}'
+    ? `{"topic":"...", "copy":"...", "image_count":1-${schedule.maxImageCount}, "image_prompts":["...", "..."]}`
     : '{"topic":"...", "copy":"..."}';
 
   if (strategy.mode === "category-freeform") {
@@ -362,18 +540,19 @@ async function generateTextPayload(slotTime, strategy, timeoutMs, schedule) {
 }
 
 async function generateImages({ copy, imageCount, imagePrompts, timeoutMs, imageWidth, imageHeight }) {
+  const targetImageCount = clamp(Number(imageCount || 1), 1, 9);
   if (!config.openai.imageApiKey || !config.openai.imageModel) {
     return [];
   }
 
-  const perImagePrompts = buildPerImagePrompts(copy, imagePrompts, imageCount);
+  const perImagePrompts = buildPerImagePrompts(copy, imagePrompts, targetImageCount);
   const protocol = getImageProtocol();
   const size = buildImageSizeToken(imageWidth, imageHeight);
 
   if (protocol === "dashscope") {
     const imageResults = await Promise.all(
-      perImagePrompts.map(async (promptBase) => {
-        const response = await axios.post(
+      perImagePrompts.map(async (promptBase, index) => {
+        const response = await withImageRetry(() => axios.post(
           `${config.openai.imageBaseUrl}/services/aigc/multimodal-generation/generation`,
           {
             model: config.openai.imageModel,
@@ -404,7 +583,7 @@ async function generateImages({ copy, imageCount, imagePrompts, timeoutMs, image
             },
             timeout: timeoutMs
           }
-        );
+        ), { imageIndex: index + 1, protocol, model: config.openai.imageModel });
 
         const contentItems = response.data?.output?.choices?.[0]?.message?.content || [];
         return contentItems
@@ -413,12 +592,12 @@ async function generateImages({ copy, imageCount, imagePrompts, timeoutMs, image
       })
     );
 
-    return imageResults.flat().slice(0, imageCount);
+    return imageResults.flat().slice(0, targetImageCount);
   }
 
   const imageResults = await Promise.all(
-    perImagePrompts.map(async (promptBase) => {
-      const response = await axios.post(
+    perImagePrompts.map(async (promptBase, index) => {
+      const response = await withImageRetry(() => axios.post(
         `${config.openai.imageBaseUrl}/images/generations`,
         {
           model: config.openai.imageModel,
@@ -433,7 +612,7 @@ async function generateImages({ copy, imageCount, imagePrompts, timeoutMs, image
           },
           timeout: timeoutMs
         }
-      );
+      ), { imageIndex: index + 1, protocol, model: config.openai.imageModel });
 
       return (response.data?.data || [])
         .map((item) => item.url || (item.b64_json ? `data:image/png;base64,${item.b64_json}` : null))
@@ -441,14 +620,14 @@ async function generateImages({ copy, imageCount, imagePrompts, timeoutMs, image
     })
   );
 
-  return imageResults.flat().slice(0, imageCount);
+  return imageResults.flat().slice(0, targetImageCount);
 }
 
 function buildRefinePrompt(draft, suggestion, options = {}) {
   const refineImages = Boolean(options.refineImages);
   const schedule = options.schedule || { copyMinLength: 200, copyMaxLength: 500 };
   const schema = refineImages && config.openai.imageModel
-    ? '{"topic":"...", "copy":"...", "image_count":1-6, "image_prompts":["...", "..."]}'
+    ? `{"topic":"...", "copy":"...", "image_count":1-${schedule.maxImageCount}, "image_prompts":["...", "..."]}`
     : '{"topic":"...", "copy":"..."}';
   const imageHint = refineImages
     ? (Array.isArray(draft.image_urls) && draft.image_urls.length
@@ -503,7 +682,7 @@ async function generateRefinedDraftPayload({ draft, suggestion, refineImages = f
       try {
         imageUrls = await generateImages({
           copy: textPayload.copy,
-          imageCount: textPayload.imageCount,
+          imageCount: Math.min(textPayload.imageCount, schedule.maxImageCount),
           imagePrompts: textPayload.imagePrompts,
           timeoutMs: schedule.llmTimeoutMs,
           imageWidth: schedule.imageWidth,
@@ -531,7 +710,7 @@ async function generateRefinedDraftPayload({ draft, suggestion, refineImages = f
     return {
       copy: textPayload.copy,
       topic: textPayload.topic,
-      imageUrls: imageUrls.slice(0, 6),
+      imageUrls: imageUrls.slice(0, 9),
       source: normalizeRefineImageSourceLabel()
     };
   } catch (error) {
@@ -568,7 +747,7 @@ async function generateDraftPayload(slotTime) {
       try {
         imageUrls = await generateImages({
           copy: textPayload.copy,
-          imageCount: textPayload.imageCount,
+          imageCount: Math.min(textPayload.imageCount, schedule.maxImageCount),
           imagePrompts: textPayload.imagePrompts,
           timeoutMs: schedule.llmTimeoutMs,
           imageWidth: schedule.imageWidth,
@@ -604,7 +783,7 @@ async function generateDraftPayload(slotTime) {
       topicSources: strategy.sourceRuns,
       relatedContext:
         strategy.mode === "category-freeform" ? strategy.categoryContexts || [] : strategy.contexts || [],
-      imageUrls: imageUrls.slice(0, 6),
+      imageUrls: imageUrls.slice(0, 9),
       source: normalizeImageSourceLabel()
     };
   } catch (error) {
@@ -688,6 +867,8 @@ module.exports = {
   generateDraftPayload,
   generateRefinedDraftPayload,
   generateDailyKindnessPayload,
+  checkTextModelAvailability,
+  checkImageModelAvailability,
   makeReminderText,
   now
 };

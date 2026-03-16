@@ -33,6 +33,15 @@ const dom = {
   llmTimeoutMs: document.getElementById("llmTimeoutMs"),
   imageWidth: document.getElementById("imageWidth"),
   imageHeight: document.getElementById("imageHeight"),
+  maxImageCount: document.getElementById("maxImageCount"),
+  textApiKey: document.getElementById("textApiKey"),
+  textBaseUrl: document.getElementById("textBaseUrl"),
+  textModel: document.getElementById("textModel"),
+  imageProtocol: document.getElementById("imageProtocol"),
+  imageApiKey: document.getElementById("imageApiKey"),
+  imageBaseUrl: document.getElementById("imageBaseUrl"),
+  imageModel: document.getElementById("imageModel"),
+  modelCheckStatus: document.getElementById("modelCheckStatus"),
   btnLogin: document.getElementById("btnLogin"),
   btnSyncAccount: document.getElementById("btnSyncAccount"),
   btnGenerate: document.getElementById("btnGenerate"),
@@ -41,6 +50,9 @@ const dom = {
   btnBackup: document.getElementById("btnBackup"),
   btnTestNotify: document.getElementById("btnTestNotify"),
   btnReadAllNotifications: document.getElementById("btnReadAllNotifications"),
+  btnSaveModelSettings: document.getElementById("btnSaveModelSettings"),
+  btnCheckTextModel: document.getElementById("btnCheckTextModel"),
+  btnCheckImageModel: document.getElementById("btnCheckImageModel"),
   btnRefreshAll: document.getElementById("btnRefreshAll"),
   btnSaveSchedule: document.getElementById("btnSaveSchedule"),
   btnCloseModal: document.getElementById("btnCloseModal"),
@@ -155,6 +167,56 @@ function setDraftFilter(preset, label = null) {
     button.classList.toggle("active", button.dataset.filter === preset);
   });
   dom.draftRangeLabel.textContent = state.draftFilterLabel;
+}
+
+
+function collectModelSettings() {
+  return {
+    textApiKey: dom.textApiKey.value.trim(),
+    textBaseUrl: dom.textBaseUrl.value.trim(),
+    textModel: dom.textModel.value.trim(),
+    imageProtocol: dom.imageProtocol.value,
+    imageApiKey: dom.imageApiKey.value.trim(),
+    imageBaseUrl: dom.imageBaseUrl.value.trim(),
+    imageModel: dom.imageModel.value.trim()
+  };
+}
+
+function renderModelSettings(modelSettings) {
+  dom.textApiKey.value = modelSettings.textApiKey || "";
+  dom.textBaseUrl.value = modelSettings.textBaseUrl || "";
+  dom.textModel.value = modelSettings.textModel || "";
+  dom.imageProtocol.value = modelSettings.imageProtocol || "openai";
+  dom.imageApiKey.value = modelSettings.imageApiKey || "";
+  dom.imageBaseUrl.value = modelSettings.imageBaseUrl || "";
+  dom.imageModel.value = modelSettings.imageModel || "";
+}
+
+async function loadModelSettings() {
+  const data = await jsonFetch("/api/system/model-settings");
+  renderModelSettings(data.modelSettings || {});
+}
+
+async function saveModelSettings() {
+  const data = await jsonFetch("/api/system/model-settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(collectModelSettings())
+  });
+  renderModelSettings(data.modelSettings || {});
+}
+
+async function checkModelAvailability(type) {
+  const endpoint = type === "image"
+    ? "/api/system/model-settings/check-image"
+    : "/api/system/model-settings/check-text";
+  dom.modelCheckStatus.textContent = `模型检查状态：正在检查${type === "image" ? "图片模型" : "文本模型"}...`;
+  const data = await jsonFetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(collectModelSettings())
+  });
+  dom.modelCheckStatus.textContent = `模型检查状态：${type === "image" ? "图片模型" : "文本模型"}可用 (${data.result.model})`;
 }
 
 function renderDraftSummary(filteredCount, summary) {
@@ -367,6 +429,7 @@ function renderSchedule(schedule, nextSlot, availableCategories, availableTopicS
   dom.llmTimeoutMs.value = schedule.llmTimeoutMs;
   dom.imageWidth.value = schedule.imageWidth;
   dom.imageHeight.value = schedule.imageHeight;
+  dom.maxImageCount.value = schedule.maxImageCount;
   dom.nextSlotLabel.textContent = `下一时段：${formatDateTime(nextSlot)}`;
   dom.homeNextSlotLabel.textContent = formatDateTime(nextSlot);
   renderCategorySelector(state.availableCategories, schedule.contentCategoryIds || []);
@@ -639,6 +702,7 @@ async function saveSchedule() {
     llmTimeoutMs: Number(dom.llmTimeoutMs.value),
     imageWidth: Number(dom.imageWidth.value),
     imageHeight: Number(dom.imageHeight.value),
+    maxImageCount: Number(dom.maxImageCount.value),
     contentCategoryIds: getSelectedCategoryIds(),
     topicSources: getConfiguredTopicSources()
   };
@@ -768,6 +832,7 @@ async function loadBackups() {
 async function refreshAll() {
   const tasks = [
     loadSchedule(),
+    loadModelSettings(),
     loadAccount(),
     loadDrafts(state.draftFilter),
     loadNotifications(),
@@ -905,6 +970,34 @@ dom.btnTestNotify.addEventListener("click", async () => {
     alert(`飞书返回: ${JSON.stringify(data.result)}`);
     await loadNotifications();
   } catch (error) {
+    alert(error.message);
+  }
+});
+
+
+dom.btnSaveModelSettings.addEventListener("click", async () => {
+  try {
+    await saveModelSettings();
+    dom.modelCheckStatus.textContent = "模型检查状态：模型配置已保存";
+  } catch (error) {
+    alert(error.message);
+  }
+});
+
+dom.btnCheckTextModel.addEventListener("click", async () => {
+  try {
+    await checkModelAvailability("text");
+  } catch (error) {
+    dom.modelCheckStatus.textContent = `模型检查状态：文本模型不可用 (${error.message})`;
+    alert(error.message);
+  }
+});
+
+dom.btnCheckImageModel.addEventListener("click", async () => {
+  try {
+    await checkModelAvailability("image");
+  } catch (error) {
+    dom.modelCheckStatus.textContent = `模型检查状态：图片模型不可用 (${error.message})`;
     alert(error.message);
   }
 });
