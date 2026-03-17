@@ -31,6 +31,7 @@ const dom = {
   copyMinLength: document.getElementById("copyMinLength"),
   copyMaxLength: document.getElementById("copyMaxLength"),
   llmTimeoutMs: document.getElementById("llmTimeoutMs"),
+  categoryTimeoutMs: document.getElementById("categoryTimeoutMs"),
   imageWidth: document.getElementById("imageWidth"),
   imageHeight: document.getElementById("imageHeight"),
   maxImageCount: document.getElementById("maxImageCount"),
@@ -466,6 +467,7 @@ function renderSchedule(schedule, nextSlot, availableCategories, availableTopicS
   dom.copyMinLength.value = schedule.copyMinLength;
   dom.copyMaxLength.value = schedule.copyMaxLength;
   dom.llmTimeoutMs.value = schedule.llmTimeoutMs;
+  dom.categoryTimeoutMs.value = schedule.categoryTimeoutMs;
   dom.imageWidth.value = schedule.imageWidth;
   dom.imageHeight.value = schedule.imageHeight;
   dom.maxImageCount.value = schedule.maxImageCount;
@@ -738,6 +740,7 @@ async function saveSchedule() {
     weiboHotSearchStartRank: weiboRange.weiboHotSearchStartRank,
     weiboHotSearchEndRank: weiboRange.weiboHotSearchEndRank,
     llmTimeoutMs: Number(dom.llmTimeoutMs.value),
+    categoryTimeoutMs: Number(dom.categoryTimeoutMs.value),
     imageWidth: Number(dom.imageWidth.value),
     imageHeight: Number(dom.imageHeight.value),
     maxImageCount: Number(dom.maxImageCount.value),

@@ -146,6 +146,7 @@ async function initSchema(db) {
         copyMinLength: 200,
         copyMaxLength: 500,
         llmTimeoutMs: 60000,
+        categoryTimeoutMs: 45000,
         imageWidth: 1024,
         imageHeight: 1024,
         maxImageCount: 3,

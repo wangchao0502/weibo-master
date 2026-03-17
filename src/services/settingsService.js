@@ -119,6 +119,7 @@ const DEFAULT_SCHEDULE = {
   copyMinLength: 200,
   copyMaxLength: 500,
   llmTimeoutMs: config.openai.requestTimeoutMs,
+  categoryTimeoutMs: 45000,
   imageWidth: config.openai.imageWidth,
   imageHeight: config.openai.imageHeight,
   maxImageCount: 3,
@@ -179,6 +180,7 @@ function normalizeSchedule(input = {}) {
   const copyMinLength = parseInteger(input.copyMinLength, DEFAULT_SCHEDULE.copyMinLength);
   const copyMaxLength = parseInteger(input.copyMaxLength, DEFAULT_SCHEDULE.copyMaxLength);
   const llmTimeoutMs = parseInteger(input.llmTimeoutMs, DEFAULT_SCHEDULE.llmTimeoutMs);
+  const categoryTimeoutMs = parseInteger(input.categoryTimeoutMs, DEFAULT_SCHEDULE.categoryTimeoutMs);
   const imageWidth = parseInteger(input.imageWidth, DEFAULT_SCHEDULE.imageWidth);
   const imageHeight = parseInteger(input.imageHeight, DEFAULT_SCHEDULE.imageHeight);
   const maxImageCount = parseInteger(input.maxImageCount, DEFAULT_SCHEDULE.maxImageCount);
@@ -232,6 +234,9 @@ function normalizeSchedule(input = {}) {
   if (llmTimeoutMs < 10000 || llmTimeoutMs > 180000) {
     throw new Error("llmTimeoutMs must be between 10000 and 180000.");
   }
+  if (categoryTimeoutMs < 5000 || categoryTimeoutMs > 180000) {
+    throw new Error("categoryTimeoutMs must be between 5000 and 180000.");
+  }
   if (imageWidth < 256 || imageWidth > 2048) {
     throw new Error("imageWidth must be between 256 and 2048.");
   }
@@ -261,6 +266,7 @@ function normalizeSchedule(input = {}) {
     copyMinLength,
     copyMaxLength,
     llmTimeoutMs,
+    categoryTimeoutMs,
     imageWidth,
     imageHeight,
     maxImageCount,

@@ -2,9 +2,12 @@ const axios = require("axios");
 const config = require("../config");
 const logger = require("../logger");
 const { getCategoriesByIds } = require("../contentCategories");
+const { getScheduleSettings } = require("./settingsService");
 
 const CATEGORY_MODEL_TIMEOUT_MS = 45000;
 const CATEGORY_MODEL_MAX_CANDIDATES = 12;
+const CATEGORY_MODEL_MAX_TOKENS = 300;
+const CATEGORY_MODEL_MAX_ATTEMPTS = 4;
 
 function fallbackMatch(topicCandidates, selectedCategories) {
   const matches = topicCandidates
@@ -35,9 +38,9 @@ function fallbackMatch(topicCandidates, selectedCategories) {
 }
 
 function buildCategoryRetryDelayMs(attempt) {
-  const base = 1200;
-  const jitter = Math.floor(Math.random() * 300);
-  return base * attempt + jitter;
+  const base = 1500;
+  const jitter = Math.floor(Math.random() * 500);
+  return base * (2 ** Math.max(0, attempt - 1)) + jitter;
 }
 
 function sleep(ms) {
@@ -50,7 +53,8 @@ function isRetriableCategoryError(error) {
   return status === 408 || status === 409 || status === 429 || status >= 500 || /timeout/i.test(message);
 }
 
-async function classifyTopicCandidatesWithModel(topicCandidates, selectedCategories) {
+async function classifyTopicCandidatesWithModel(topicCandidates, selectedCategories, schedule) {
+  const timeoutMs = Number(schedule?.categoryTimeoutMs || schedule?.llmTimeoutMs || CATEGORY_MODEL_TIMEOUT_MS);
   const candidateTopics = topicCandidates.slice(0, CATEGORY_MODEL_MAX_CANDIDATES);
   const prompt = [
     "你是内容选题助手。请判断下面哪些话题候选属于用户选定的内容板块。",
@@ -70,20 +74,23 @@ async function classifyTopicCandidatesWithModel(topicCandidates, selectedCategor
 
   logger.debug("category", "classification prompt", {
     candidateCount: candidateTopics.length,
+    timeoutMs,
+    maxTokens: CATEGORY_MODEL_MAX_TOKENS,
     prompt
   });
 
   let lastError;
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
+  for (let attempt = 1; attempt <= CATEGORY_MODEL_MAX_ATTEMPTS; attempt += 1) {
     try {
       const response = await axios.post(
         `${config.openai.baseUrl}/chat/completions`,
         {
           model: config.openai.textModel,
-          temperature: 1,
+          temperature: 0.2,
+          max_tokens: CATEGORY_MODEL_MAX_TOKENS,
           response_format: { type: "json_object" },
           messages: [
-            { role: "system", content: "你只能返回合法 JSON。" },
+            { role: "system", content: "你是严格的分类器。不要输出思考过程、推理过程或解释，只能返回合法 JSON。" },
             { role: "user", content: prompt }
           ]
         },
@@ -92,7 +99,7 @@ async function classifyTopicCandidatesWithModel(topicCandidates, selectedCategor
             Authorization: `Bearer ${config.openai.apiKey}`,
             "Content-Type": "application/json"
           },
-          timeout: CATEGORY_MODEL_TIMEOUT_MS
+          timeout: timeoutMs
         }
       );
 
@@ -100,13 +107,14 @@ async function classifyTopicCandidatesWithModel(topicCandidates, selectedCategor
       logger.debug("category", "classification response", {
         attempt,
         candidateCount: candidateTopics.length,
+        timeoutMs,
         content
       });
       const parsed = JSON.parse(content);
       return Array.isArray(parsed.matches) ? parsed.matches : [];
     } catch (error) {
       lastError = error;
-      if (attempt >= 2 || !isRetriableCategoryError(error)) {
+      if (attempt >= CATEGORY_MODEL_MAX_ATTEMPTS || !isRetriableCategoryError(error)) {
         throw error;
       }
       const delayMs = buildCategoryRetryDelayMs(attempt);
@@ -114,6 +122,7 @@ async function classifyTopicCandidatesWithModel(topicCandidates, selectedCategor
         attempt,
         delayMs,
         candidateCount: candidateTopics.length,
+        timeoutMs,
         error: error.message,
         status: error.response?.status
       });
@@ -133,15 +142,18 @@ async function matchTopicCandidatesToCategories(topicCandidates, categoryIds) {
     };
   }
 
+  const schedule = await getScheduleSettings();
+  const categoryTimeoutMs = Number(schedule.categoryTimeoutMs || schedule.llmTimeoutMs || CATEGORY_MODEL_TIMEOUT_MS);
+
   let matches = [];
   if (config.openai.apiKey) {
     try {
-      matches = await classifyTopicCandidatesWithModel(topicCandidates, selectedCategories);
+      matches = await classifyTopicCandidatesWithModel(topicCandidates, selectedCategories, schedule);
     } catch (error) {
       logger.warn("category", "model classification failed, fallback to keywords", {
         error: error.message,
         candidateCount: topicCandidates.length,
-        timeoutMs: CATEGORY_MODEL_TIMEOUT_MS,
+        timeoutMs: categoryTimeoutMs,
         status: error.response?.status
       });
       matches = fallbackMatch(topicCandidates, selectedCategories);
