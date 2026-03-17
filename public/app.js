@@ -100,6 +100,45 @@ function escapeHtml(text) {
     .replace(/'/g, "&#39;");
 }
 
+async function copyPlainText(text) {
+  const normalized = String(text || "").trim();
+  if (!normalized) {
+    throw new Error("当前微博正文为空，无法复制。");
+  }
+
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(normalized);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = normalized;
+  textarea.setAttribute("readonly", "readonly");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  textarea.style.pointerEvents = "none";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  document.body.removeChild(textarea);
+  if (!copied) {
+    throw new Error("浏览器未允许复制到剪贴板。");
+  }
+}
+
+function flashActionSuccess(actionHost, successLabel = "已复制") {
+  if (!(actionHost instanceof HTMLElement)) {
+    return;
+  }
+  const originalText = actionHost.textContent || "";
+  actionHost.textContent = successLabel;
+  actionHost.disabled = true;
+  window.setTimeout(() => {
+    actionHost.textContent = originalText;
+    actionHost.disabled = false;
+  }, 1200);
+}
+
 function formatCount(value) {
   const num = Number(value || 0);
   if (num >= 10000) {
@@ -503,6 +542,7 @@ function buildCardMenu(draft) {
     <details class="card-menu">
       <summary class="card-menu-trigger" aria-label="more actions">···</summary>
       <div class="card-menu-panel">
+        <button class="card-menu-item" data-action="copy-text" data-id="${draft.id}" type="button">复制正文</button>
         <button class="card-menu-item" data-action="toggle-refine" data-id="${draft.id}" type="button">AI 润色</button>
         <button class="card-menu-item" data-action="approve" data-id="${draft.id}" type="button">批准</button>
         <button class="card-menu-item" data-action="reject" data-id="${draft.id}" type="button">驳回</button>
@@ -553,9 +593,7 @@ function renderDrafts(items) {
             <span class="draft-status ${escapeHtml(status)}">${escapeHtml(statusText)}</span>
             ${draft.__pending ? "" : buildCardMenu(draft)}
           </div>
-          <div class="weibo-copy">
-            ${draft.__pending ? buildLoadingBody() : escapeHtml(String(draft.text || "").trimStart())}
-          </div>
+          <div class="weibo-copy">${draft.__pending ? buildLoadingBody() : escapeHtml(String(draft.text || "").trimStart())}</div>
           ${draft.__pending ? "" : buildWeiboImages(images)}
           ${showRefine ? buildRefineComposer(draft, isRefining) : ""}
           <div class="weibo-toolbar">
@@ -1051,6 +1089,18 @@ document.body.addEventListener("click", async (event) => {
   const url = actionHost.getAttribute("data-url");
 
   try {
+    if (action === "copy-text") {
+      const draft = state.drafts.find((item) => String(item.id) === String(id));
+      await copyPlainText(draft?.text || "");
+      flashActionSuccess(actionHost);
+      const menu = actionHost.closest("details.card-menu");
+      if (menu instanceof HTMLDetailsElement) {
+        window.setTimeout(() => {
+          menu.removeAttribute("open");
+        }, 160);
+      }
+      return;
+    }
     if (action === "toggle-refine") {
       toggleRefinePanel(id);
       return;
