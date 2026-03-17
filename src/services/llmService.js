@@ -17,6 +17,9 @@ class GenerationFailedError extends Error {
   }
 }
 
+const TEXT_MODEL_MAX_TOKENS = 1600;
+const TEXT_MODEL_CHECK_MAX_TOKENS = 96;
+
 function clamp(num, min, max) {
   return Math.max(min, Math.min(max, num));
 }
@@ -27,6 +30,16 @@ function sleep(ms) {
 
 function normalizeInlineText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function normalizeCopyText(value) {
+  return String(value || "")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+/g, " ").trim())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function extractHashtags(text) {
@@ -72,8 +85,11 @@ function moveTagsToFront(copy, selectedTopic = null) {
   const topicTag = toWeiboHotTag(selectedTopic);
   const inlineTags = extractHashtags(copy);
   const tags = uniqueTags([topicTag, ...inlineTags]);
-  const body = normalizeInlineText(String(copy || "").replace(/#[^#\n\r]{1,80}#/g, " "));
-  return normalizeInlineText(`${tags.join(" ")} ${body}`);
+  const body = normalizeCopyText(String(copy || "").replace(/#[^#\n\r]{1,80}#/g, " "));
+  if (!tags.length) {
+    return body;
+  }
+  return body ? `${tags.join(" ")}\n${body}` : tags.join(" ");
 }
 
 function extractJsonObject(text) {
@@ -94,6 +110,79 @@ function extractJsonObject(text) {
       return null;
     }
   }
+}
+
+function extractAssistantContent(responseData) {
+  const choice = responseData?.choices?.[0] || {};
+  const message = choice.message || {};
+  if (typeof message.content === "string") {
+    return message.content.trim();
+  }
+  if (Array.isArray(message.content)) {
+    return message.content
+      .map((item) => {
+        if (typeof item === "string") {
+          return item;
+        }
+        if (typeof item?.text === "string") {
+          return item.text;
+        }
+        if (typeof item?.content === "string") {
+          return item.content;
+        }
+        return "";
+      })
+      .join("")
+      .trim();
+  }
+  if (typeof choice.text === "string") {
+    return choice.text.trim();
+  }
+  return "";
+}
+
+function extractAssistantReasoning(responseData) {
+  const choice = responseData?.choices?.[0] || {};
+  const message = choice.message || {};
+  const reasoning = [];
+  if (typeof message.reasoning_content === "string") {
+    reasoning.push(message.reasoning_content);
+  }
+  if (Array.isArray(message.reasoning_content)) {
+    reasoning.push(
+      message.reasoning_content
+        .map((item) => (typeof item === "string" ? item : String(item?.text || item?.content || "")))
+        .join("")
+    );
+  }
+  return reasoning.join("").trim();
+}
+
+function getProviderErrorMessage(error) {
+  const providerMessage = error?.response?.data?.error?.message
+    || error?.response?.data?.message
+    || error?.response?.data?.error_description
+    || "";
+  return String(providerMessage || error?.message || "request_failed").trim();
+}
+
+function ensureChatCompletionResponse(response, contextLabel = "文本模型") {
+  const contentType = String(response?.headers?.["content-type"] || "").toLowerCase();
+  if (contentType.includes("text/html")) {
+    throw new GenerationFailedError(`${contextLabel}接口返回了 HTML 页面，当前 Base URL 很可能填成了网站首页而不是 API 地址。`, {
+      code: "invalid_text_model_base_url",
+      retryable: false,
+      causeMessage: typeof response?.data === "string" ? response.data.slice(0, 160) : ""
+    });
+  }
+  if (!response || !response.data || typeof response.data !== "object" || Array.isArray(response.data)) {
+    throw new GenerationFailedError(`${contextLabel}接口返回了非标准 JSON 响应，当前 Base URL 或网关协议不兼容。`, {
+      code: "invalid_text_model_response",
+      retryable: false,
+      causeMessage: typeof response?.data === "string" ? response.data.slice(0, 160) : ""
+    });
+  }
+  return response;
 }
 
 function formatNewsLines(news = []) {
@@ -128,30 +217,78 @@ async function checkTextModelAvailability(modelSettingsInput = {}) {
     });
   }
 
-  const response = await axios.post(
-    `${modelSettings.textBaseUrl}/chat/completions`,
-    {
-      model: modelSettings.textModel,
-      messages: [
-        { role: "system", content: "Reply with OK only." },
-        { role: "user", content: "ping" }
-      ],
-      max_tokens: 8
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${modelSettings.textApiKey}`,
-        "Content-Type": "application/json"
+  const basePayload = {
+    model: modelSettings.textModel,
+    temperature: 0,
+    max_tokens: TEXT_MODEL_CHECK_MAX_TOKENS,
+    messages: [
+      {
+        role: "system",
+        content: "你只能返回合法 JSON，不要输出解释、推理过程或多余文本。"
       },
-      timeout: 20000
+      {
+        role: "user",
+        content: '返回 JSON：{"ok":true,"message":"pong"}'
+      }
+    ]
+  };
+
+  async function send(payload) {
+    return axios.post(
+      `${modelSettings.textBaseUrl}/chat/completions`,
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${modelSettings.textApiKey}`,
+          "Content-Type": "application/json"
+        },
+        timeout: 20000
+      }
+    );
+  }
+
+  let response;
+  let mode = "json_object";
+  try {
+    response = ensureChatCompletionResponse(await send({
+      ...basePayload,
+      response_format: { type: "json_object" }
+    }), "文本模型");
+    if (!extractAssistantContent(response.data)) {
+      mode = "plain_json";
+      response = ensureChatCompletionResponse(await send(basePayload), "文本模型");
     }
-  );
+  } catch (error) {
+    const status = error.response?.status;
+    if (status === 400 || status === 422) {
+      mode = "plain_json";
+      response = ensureChatCompletionResponse(await send(basePayload), "文本模型");
+    } else {
+      throw new GenerationFailedError(getProviderErrorMessage(error), {
+        code: error?.response?.data?.error?.code || "text_model_check_failed",
+        retryable: false,
+        causeMessage: getProviderErrorMessage(error)
+      });
+    }
+  }
+
+  const content = extractAssistantContent(response.data);
+  const reasoning = extractAssistantReasoning(response.data);
+  const parsed = extractJsonObject(content);
+  if (!content || !parsed || parsed.ok !== true) {
+    throw new GenerationFailedError("文本模型检测未返回可解析的 JSON 内容，当前模型不兼容生成链路。", {
+      code: "text_model_incompatible",
+      retryable: false
+    });
+  }
 
   return {
     available: true,
     provider: modelSettings.textBaseUrl,
     model: modelSettings.textModel,
-    content: response.data?.choices?.[0]?.message?.content || ""
+    mode,
+    content,
+    reasoningLength: reasoning.length
   };
 }
 
@@ -268,17 +405,21 @@ function buildVoiceStyleRules(selectedCategories = []) {
   const hasCasual = selectedIds.some((id) => CASUAL_CATEGORY_IDS.has(id));
   const rules = [
     '必须以“我”的视角写，像真人博主在表达观察、判断和取舍，不要写成新闻播报、通稿或公文口吻',
-    '要有信息密度和个人判断，但表达自然，不要堆术语，也不要空泛抒情'
+    '要有信息密度和个人判断，但表达自然，不要堆术语，也不要空泛抒情',
+    '正文尽量分成 2-4 个短段落，每段 1-3 句，符合正常用户发微博的阅读节奏，不要写成一整块大段',
+    '可以少量使用 1-3 个贴合语气的 emoji 点缀，但不要每句都带，也不要靠 emoji 撑气氛',
+    '非必要不要频繁给普通名词、观点或情绪加引号，尤其不要反复出现“这种词”“那种词”的写法'
   ];
 
   if (hasRigorous && !hasCasual) {
-    rules.push('这类偏严谨的话题要专业克制，信息要准确，结论要有边界，不确定内容明确用保守措辞');
+    rules.push('这类偏严谨的话题要专业克制，信息要准确，结论要有边界，不确定内容明确用保守措辞，但也可以有一两句轻巧的人味表达，别板着脸说话');
   } else if (hasCasual && !hasRigorous) {
-    rules.push('这类偏生活或娱乐的话题可以自然、轻松、略带幽默，但不要油腻玩梗，更不要为了活泼牺牲信息量');
+    rules.push('这类偏生活或娱乐的话题可以自然、轻松、略带幽默，允许适度抖机灵，但不要油腻玩梗，更不要为了活泼牺牲信息量');
   } else {
-    rules.push('如果话题偏科技、教育、健康等严谨领域，就专业克制；如果偏生活、娱乐等轻松领域，可以自然幽默，但都要保证信息量和判断力');
+    rules.push('如果话题偏科技、教育、健康等严谨领域，就专业克制并保留一点人味；如果偏生活、娱乐等轻松领域，可以自然幽默、适度抖机灵，但都要保证信息量和判断力');
   }
 
+  rules.push('可以有一两句自然的小机灵、小反差或轻微吐槽，但要像真人顺手带出来，不要为了段子感牺牲信息和可信度');
   rules.push('不要在结尾引导点赞、评论、转发、关注，也不要写“你怎么看”“欢迎留言”等互动钩子');
   return rules;
 }
@@ -287,7 +428,13 @@ function shouldRetryStructuredContent(error) {
   if (!(error instanceof GenerationFailedError)) {
     return false;
   }
-  return ["invalid_model_payload", "copy_too_short", "copy_too_long"].includes(error.code);
+  return [
+    "invalid_model_payload",
+    "copy_too_short",
+    "copy_too_long",
+    "copy_not_segmented",
+    "copy_too_many_quoted_terms"
+  ].includes(error.code);
 }
 
 function buildTextRetryDelayMs(attempt) {
@@ -305,7 +452,7 @@ function parseModelPayload(parsed, contextLabel = "微博草稿", options = {}) 
 
   const minCopyLength = Number.isInteger(options.minCopyLength) ? options.minCopyLength : 60;
   const maxCopyLength = Number.isInteger(options.maxCopyLength) ? options.maxCopyLength : null;
-  const copy = normalizeInlineText(parsed.copy || "");
+  const copy = normalizeCopyText(parsed.copy || "");
   if (copy.length < minCopyLength) {
     throw new GenerationFailedError(`模型返回${contextLabel}过短，未达到 ${minCopyLength} 字要求。`, {
       code: "copy_too_short"
@@ -314,6 +461,20 @@ function parseModelPayload(parsed, contextLabel = "微博草稿", options = {}) 
   if (maxCopyLength && copy.length > maxCopyLength) {
     throw new GenerationFailedError(`模型返回${contextLabel}过长，超过 ${maxCopyLength} 字限制。`, {
       code: "copy_too_long"
+    });
+  }
+
+  const paragraphCount = copy.split("\n").filter(Boolean).length;
+  if (copy.length >= 160 && paragraphCount < 2) {
+    throw new GenerationFailedError(`模型返回${contextLabel}没有分段，不符合微博阅读习惯。`, {
+      code: "copy_not_segmented"
+    });
+  }
+
+  const quotedTerms = copy.match(/“[^”]{1,12}”/g) || [];
+  if (quotedTerms.length > 3) {
+    throw new GenerationFailedError(`模型返回${contextLabel}引号词过多，看起来不像自然表达。`, {
+      code: "copy_too_many_quoted_terms"
     });
   }
 
@@ -363,9 +524,10 @@ function toGenerationError(error, fallbackMessage) {
       causeMessage: error.message
     });
   }
-  return new GenerationFailedError(fallbackMessage, {
+  const providerMessage = getProviderErrorMessage(error);
+  return new GenerationFailedError(providerMessage === fallbackMessage ? fallbackMessage : `${fallbackMessage} 原因：${providerMessage}`, {
     code: "generation_failed",
-    causeMessage: error?.message || fallbackMessage
+    causeMessage: providerMessage || fallbackMessage
   });
 }
 
@@ -455,6 +617,7 @@ async function requestTextPayload(prompt, timeoutMs) {
   const basePayload = {
     model: config.openai.textModel,
     temperature: 1,
+    max_tokens: TEXT_MODEL_MAX_TOKENS,
     messages: [
       {
         role: "system",
@@ -464,23 +627,35 @@ async function requestTextPayload(prompt, timeoutMs) {
     ]
   };
 
+  async function send(payload) {
+    return postChatCompletion(payload, timeoutMs);
+  }
+
   try {
-    return await postChatCompletion(
-      {
-        ...basePayload,
-        response_format: { type: "json_object" }
-      },
-      timeoutMs
-    );
+    const structuredResponse = ensureChatCompletionResponse(await send({
+      ...basePayload,
+      response_format: { type: "json_object" }
+    }), "文本生成模型");
+    const structuredContent = extractAssistantContent(structuredResponse.data);
+    if (structuredContent) {
+      return structuredResponse;
+    }
+
+    logger.warn("llm", "empty model content with structured response, retrying without response_format", {
+      timeoutMs,
+      model: config.openai.textModel,
+      reasoningLength: extractAssistantReasoning(structuredResponse.data).length
+    });
+    return ensureChatCompletionResponse(await send(basePayload), "文本生成模型");
   } catch (error) {
     const status = error.response?.status;
     if (status === 429) {
       logger.warn("llm", "rate limited, retrying text generation", { status });
       await sleep(3000);
-      return postChatCompletion(basePayload, timeoutMs);
+      return ensureChatCompletionResponse(await send(basePayload), "文本生成模型");
     }
     if (status === 400 || status === 422) {
-      return postChatCompletion(basePayload, timeoutMs);
+      return ensureChatCompletionResponse(await send(basePayload), "文本生成模型");
     }
     throw error;
   }
@@ -640,7 +815,7 @@ async function generateTextPayload(slotTime, strategy, timeoutMs, schedule) {
         prompt
       });
       const response = await requestTextPayload(prompt, timeoutMs);
-      const content = response.data?.choices?.[0]?.message?.content || "";
+      const content = extractAssistantContent(response.data);
       logger.debug("llm", "draft generation response", {
         attempt,
         content
@@ -826,7 +1001,7 @@ async function generateRefinedDraftPayload({ draft, suggestion, refineImages = f
           prompt
         });
         const response = await requestTextPayload(prompt, schedule.llmTimeoutMs);
-        const content = response.data?.choices?.[0]?.message?.content || "";
+        const content = extractAssistantContent(response.data);
         logger.debug("llm", "draft refine response", {
           draftId: draft.id,
           attempt,
@@ -997,7 +1172,7 @@ async function generateDraftPayload(slotTime) {
 const DAILY_KINDNESS_PREFIX = "#每日一善[超话]# [平安果] #每日一善# [心] #阳光信用# [浮云] ";
 
 function ensureDailyKindnessCopy(copy) {
-  const body = normalizeInlineText(copy || "");
+  const body = normalizeCopyText(copy || "");
   const finalCopy = `${DAILY_KINDNESS_PREFIX}${body}`.trim();
   if (finalCopy.length < 100) {
     throw new GenerationFailedError("每日一善文案长度不足 100 字，已放弃本次生成。", {
@@ -1032,7 +1207,7 @@ async function generateDailyKindnessPayload() {
       prompt
     });
     const response = await requestTextPayload(prompt, schedule.llmTimeoutMs);
-    const content = response.data?.choices?.[0]?.message?.content || "";
+    const content = extractAssistantContent(response.data);
     logger.debug("llm", "daily kindness response", {
       content
     });
