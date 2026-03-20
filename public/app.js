@@ -37,12 +37,16 @@ const dom = {
   maxImageCount: document.getElementById("maxImageCount"),
   textApiKey: document.getElementById("textApiKey"),
   textBaseUrl: document.getElementById("textBaseUrl"),
+  textProtocol: document.getElementById("textProtocol"),
   textModel: document.getElementById("textModel"),
+  kimiThinkingField: document.getElementById("kimiThinkingField"),
+  kimiThinkingEnabled: document.getElementById("kimiThinkingEnabled"),
   imageProtocol: document.getElementById("imageProtocol"),
   imageApiKey: document.getElementById("imageApiKey"),
   imageBaseUrl: document.getElementById("imageBaseUrl"),
   imageModel: document.getElementById("imageModel"),
-  modelCheckStatus: document.getElementById("modelCheckStatus"),
+  textModelCheckStatus: document.getElementById("textModelCheckStatus"),
+  imageModelCheckStatus: document.getElementById("imageModelCheckStatus"),
   btnLogin: document.getElementById("btnLogin"),
   btnSyncAccount: document.getElementById("btnSyncAccount"),
   btnGenerate: document.getElementById("btnGenerate"),
@@ -210,11 +214,26 @@ function setDraftFilter(preset, label = null) {
 }
 
 
+function isKimiTextSettings(modelSettings = {}) {
+  const protocol = String(modelSettings.textProtocol || dom.textProtocol?.value || "openai").toLowerCase();
+  const model = String(modelSettings.textModel || dom.textModel?.value || "").trim().toLowerCase();
+  return protocol === "moonshot" && model.startsWith("kimi-");
+}
+
+function updateKimiThinkingVisibility(modelSettings = {}) {
+  if (!dom.kimiThinkingField) {
+    return;
+  }
+  dom.kimiThinkingField.classList.toggle("is-hidden", !isKimiTextSettings(modelSettings));
+}
+
 function collectModelSettings() {
   return {
     textApiKey: dom.textApiKey.value.trim(),
     textBaseUrl: dom.textBaseUrl.value.trim(),
+    textProtocol: dom.textProtocol.value,
     textModel: dom.textModel.value.trim(),
+    kimiThinkingEnabled: dom.kimiThinkingEnabled.checked,
     imageProtocol: dom.imageProtocol.value,
     imageApiKey: dom.imageApiKey.value.trim(),
     imageBaseUrl: dom.imageBaseUrl.value.trim(),
@@ -225,11 +244,14 @@ function collectModelSettings() {
 function renderModelSettings(modelSettings) {
   dom.textApiKey.value = modelSettings.textApiKey || "";
   dom.textBaseUrl.value = modelSettings.textBaseUrl || "";
+  dom.textProtocol.value = modelSettings.textProtocol || "openai";
   dom.textModel.value = modelSettings.textModel || "";
+  dom.kimiThinkingEnabled.checked = modelSettings.kimiThinkingEnabled !== false;
   dom.imageProtocol.value = modelSettings.imageProtocol || "openai";
   dom.imageApiKey.value = modelSettings.imageApiKey || "";
   dom.imageBaseUrl.value = modelSettings.imageBaseUrl || "";
   dom.imageModel.value = modelSettings.imageModel || "";
+  updateKimiThinkingVisibility(modelSettings);
 }
 
 async function loadModelSettings() {
@@ -250,13 +272,14 @@ async function checkModelAvailability(type) {
   const endpoint = type === "image"
     ? "/api/system/model-settings/check-image"
     : "/api/system/model-settings/check-text";
-  dom.modelCheckStatus.textContent = `模型检查状态：正在检查${type === "image" ? "图片模型" : "文本模型"}...`;
+  const statusHost = type === "image" ? dom.imageModelCheckStatus : dom.textModelCheckStatus;
+  statusHost.textContent = `${type === "image" ? "图片模型" : "文本模型"}状态：正在检查...`;
   const data = await jsonFetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(collectModelSettings())
   });
-  dom.modelCheckStatus.textContent = `模型检查状态：${type === "image" ? "图片模型" : "文本模型"}可用 (${data.result.model})`;
+  statusHost.textContent = `${type === "image" ? "图片模型" : "文本模型"}状态：可用 (${data.result.model})`;
 }
 
 function renderDraftSummary(filteredCount, summary) {
@@ -1019,7 +1042,8 @@ dom.btnTestNotify.addEventListener("click", async () => {
 dom.btnSaveModelSettings.addEventListener("click", async () => {
   try {
     await saveModelSettings();
-    dom.modelCheckStatus.textContent = "模型检查状态：模型配置已保存";
+    dom.textModelCheckStatus.textContent = "文本模型状态：配置已保存";
+    dom.imageModelCheckStatus.textContent = "图片模型状态：配置已保存";
   } catch (error) {
     alert(error.message);
   }
@@ -1029,7 +1053,7 @@ dom.btnCheckTextModel.addEventListener("click", async () => {
   try {
     await checkModelAvailability("text");
   } catch (error) {
-    dom.modelCheckStatus.textContent = `模型检查状态：文本模型不可用 (${error.message})`;
+    dom.textModelCheckStatus.textContent = `文本模型状态：不可用 (${error.message})`;
     alert(error.message);
   }
 });
@@ -1038,9 +1062,17 @@ dom.btnCheckImageModel.addEventListener("click", async () => {
   try {
     await checkModelAvailability("image");
   } catch (error) {
-    dom.modelCheckStatus.textContent = `模型检查状态：图片模型不可用 (${error.message})`;
+    dom.imageModelCheckStatus.textContent = `图片模型状态：不可用 (${error.message})`;
     alert(error.message);
   }
+});
+
+dom.textProtocol?.addEventListener("change", () => {
+  updateKimiThinkingVisibility();
+});
+
+dom.textModel?.addEventListener("input", () => {
+  updateKimiThinkingVisibility();
 });
 
 dom.btnReadAllNotifications.addEventListener("click", async () => {

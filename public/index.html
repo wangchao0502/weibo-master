@@ -233,45 +233,79 @@
                 </div>
                 <div class="actions">
                   <button id="btnSaveModelSettings">保存模型配置</button>
-                  <button id="btnCheckTextModel" class="secondary">检查文本模型</button>
-                  <button id="btnCheckImageModel" class="secondary">检查图片模型</button>
                 </div>
               </div>
-              <div class="form-grid">
-                <label class="field">
-                  <span>文本模型 API Key</span>
-                  <input id="textApiKey" type="password" autocomplete="off" />
-                </label>
-                <label class="field">
-                  <span>文本模型 Base URL</span>
-                  <input id="textBaseUrl" type="text" placeholder="https://api.openai.com/v1" />
-                </label>
-                <label class="field">
-                  <span>文本模型名称</span>
-                  <input id="textModel" type="text" placeholder="gpt-4o-mini" />
-                </label>
-                <label class="field">
-                  <span>图片协议</span>
-                  <select id="imageProtocol">
-                    <option value="openai">openai</option>
-                    <option value="dashscope">dashscope</option>
-                  </select>
-                </label>
-                <label class="field">
-                  <span>图片模型 API Key</span>
-                  <input id="imageApiKey" type="password" autocomplete="off" />
-                </label>
-                <label class="field">
-                  <span>图片模型 Base URL</span>
-                  <input id="imageBaseUrl" type="text" placeholder="https://api.openai.com/v1" />
-                </label>
-                <label class="field">
-                  <span>图片模型名称</span>
-                  <input id="imageModel" type="text" placeholder="gpt-image-1 / qwen-image-2.0" />
-                </label>
+              <div class="model-config-grid">
+                <section class="model-config-card">
+                  <div class="model-config-head">
+                    <div>
+                      <h3>文本模型</h3>
+                      <div class="hint">支持 OpenAI 兼容和 Moonshot/Kimi；Kimi 可单独控制思考模式。</div>
+                    </div>
+                    <button id="btnCheckTextModel" class="secondary" type="button">检查文本模型</button>
+                  </div>
+                  <div class="form-grid compact-form-grid">
+                    <label class="field">
+                      <span>文本模型类型</span>
+                      <select id="textProtocol">
+                        <option value="openai">openai-compatible</option>
+                        <option value="moonshot">moonshot</option>
+                      </select>
+                    </label>
+                    <label class="field">
+                      <span>文本模型名称</span>
+                      <input id="textModel" type="text" placeholder="gpt-4o-mini / kimi-k2.5" />
+                    </label>
+                    <label class="field field-span-2">
+                      <span>文本模型 API Key</span>
+                      <input id="textApiKey" type="password" autocomplete="off" />
+                    </label>
+                    <label class="field field-span-2">
+                      <span>文本模型 Base URL</span>
+                      <input id="textBaseUrl" type="text" placeholder="https://api.openai.com/v1" />
+                    </label>
+                    <label id="kimiThinkingField" class="field checkbox-field field-span-2">
+                      <span>Kimi 思考模式</span>
+                      <input id="kimiThinkingEnabled" type="checkbox" />
+                    </label>
+                  </div>
+                  <div class="hint">关闭时会附带 <code>thinking: { type: "disabled" }</code>，仅对 Moonshot/Kimi 生效。</div>
+                  <div id="textModelCheckStatus" class="hint">文本模型状态：未检查</div>
+                </section>
+
+                <section class="model-config-card">
+                  <div class="model-config-head">
+                    <div>
+                      <h3>图片模型</h3>
+                      <div class="hint">支持 OpenAI 兼容和 DashScope 文生图协议。</div>
+                    </div>
+                    <button id="btnCheckImageModel" class="secondary" type="button">检查图片模型</button>
+                  </div>
+                  <div class="form-grid compact-form-grid">
+                    <label class="field">
+                      <span>图片协议</span>
+                      <select id="imageProtocol">
+                        <option value="openai">openai</option>
+                        <option value="dashscope">dashscope</option>
+                      </select>
+                    </label>
+                    <label class="field">
+                      <span>图片模型名称</span>
+                      <input id="imageModel" type="text" placeholder="gpt-image-1 / qwen-image-2.0" />
+                    </label>
+                    <label class="field field-span-2">
+                      <span>图片模型 API Key</span>
+                      <input id="imageApiKey" type="password" autocomplete="off" />
+                    </label>
+                    <label class="field field-span-2">
+                      <span>图片模型 Base URL</span>
+                      <input id="imageBaseUrl" type="text" placeholder="https://api.openai.com/v1" />
+                    </label>
+                  </div>
+                  <div class="hint">图片模型留空则不生成图片；图片 API Key / Base URL 留空时，会回退复用文本模型配置。</div>
+                  <div id="imageModelCheckStatus" class="hint">图片模型状态：未检查</div>
+                </section>
               </div>
-              <div class="hint">图片模型留空则不生成图片；图片 API Key / Base URL 留空时，会回退复用文本模型配置。</div>
-              <div id="modelCheckStatus" class="hint">模型检查状态：未检查</div>
             </section>
           </section>
 

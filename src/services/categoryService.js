@@ -3,11 +3,22 @@ const config = require("../config");
 const logger = require("../logger");
 const { getCategoriesByIds } = require("../contentCategories");
 const { getScheduleSettings } = require("./settingsService");
+const { inferTextProtocol, resolveTextTemperature, buildKimiThinkingPayload } = require("./modelCompat");
 
 const CATEGORY_MODEL_TIMEOUT_MS = 45000;
 const CATEGORY_MODEL_MAX_CANDIDATES = 12;
 const CATEGORY_MODEL_MAX_TOKENS = 300;
 const CATEGORY_MODEL_MAX_ATTEMPTS = 4;
+
+function resolveCategoryTemperature() {
+  return resolveTextTemperature(
+    config.openai.baseUrl,
+    config.openai.textModel,
+    inferTextProtocol(config.openai.baseUrl, config.openai.textModel, config.openai.textProtocol),
+    0.2,
+    config.openai.kimiThinkingEnabled
+  );
+}
 
 function fallbackMatch(topicCandidates, selectedCategories) {
   const matches = topicCandidates
@@ -72,10 +83,13 @@ async function classifyTopicCandidatesWithModel(topicCandidates, selectedCategor
     "3. 如果不确定，不要硬匹配"
   ].join("\n");
 
+  const temperature = resolveCategoryTemperature();
+
   logger.debug("category", "classification prompt", {
     candidateCount: candidateTopics.length,
     timeoutMs,
     maxTokens: CATEGORY_MODEL_MAX_TOKENS,
+    temperature,
     prompt
   });
 
@@ -86,8 +100,14 @@ async function classifyTopicCandidatesWithModel(topicCandidates, selectedCategor
         `${config.openai.baseUrl}/chat/completions`,
         {
           model: config.openai.textModel,
-          temperature: 0.2,
+          temperature,
           max_tokens: CATEGORY_MODEL_MAX_TOKENS,
+          ...buildKimiThinkingPayload({
+            baseUrl: config.openai.baseUrl,
+            model: config.openai.textModel,
+            textProtocol: config.openai.textProtocol,
+            kimiThinkingEnabled: config.openai.kimiThinkingEnabled
+          }),
           response_format: { type: "json_object" },
           messages: [
             { role: "system", content: "你是严格的分类器。不要输出思考过程、推理过程或解释，只能返回合法 JSON。" },

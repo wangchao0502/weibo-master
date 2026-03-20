@@ -2,10 +2,16 @@ const axios = require("axios");
 const config = require("../config");
 const { now } = require("../time");
 const { getScheduleSettings, buildEffectiveModelSettings } = require("./settingsService");
-const { buildTopicContext, buildCategoryNewsContext } = require("./hotTopicService");
+const { buildTopicContext } = require("./hotTopicService");
 const { matchTopicCandidatesToCategories } = require("./categoryService");
 const { getCategoriesByIds } = require("../contentCategories");
 const logger = require("../logger");
+const {
+  inferTextProtocol,
+  isMoonshotKimiModel,
+  resolveTextTemperature,
+  buildKimiThinkingPayload
+} = require("./modelCompat");
 
 class GenerationFailedError extends Error {
   constructor(message, options = {}) {
@@ -19,6 +25,7 @@ class GenerationFailedError extends Error {
 
 const TEXT_MODEL_MAX_TOKENS = 1600;
 const TEXT_MODEL_CHECK_MAX_TOKENS = 96;
+const TEXT_MODEL_CHECK_MAX_TOKENS_REASONING = 256;
 
 function clamp(num, min, max) {
   return Math.max(min, Math.min(max, num));
@@ -26,6 +33,13 @@ function clamp(num, min, max) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function resolveTextCheckMaxTokens(baseUrl = "", model = "", textProtocol = "") {
+  if (isMoonshotKimiModel(baseUrl, model, textProtocol)) {
+    return TEXT_MODEL_CHECK_MAX_TOKENS_REASONING;
+  }
+  return TEXT_MODEL_CHECK_MAX_TOKENS;
 }
 
 function normalizeInlineText(value) {
@@ -200,7 +214,9 @@ function normalizeCheckModelSettings(modelSettingsInput = {}) {
   return {
     textApiKey: effective.textApiKey,
     textBaseUrl: effective.textBaseUrl,
+    textProtocol: effective.textProtocol,
     textModel: effective.textModel,
+    kimiThinkingEnabled: effective.kimiThinkingEnabled,
     imageApiKey: effective.imageApiKey,
     imageBaseUrl: effective.imageBaseUrl,
     imageProtocol: effective.imageProtocol,
@@ -219,8 +235,14 @@ async function checkTextModelAvailability(modelSettingsInput = {}) {
 
   const basePayload = {
     model: modelSettings.textModel,
-    temperature: 0,
-    max_tokens: TEXT_MODEL_CHECK_MAX_TOKENS,
+    temperature: resolveTextTemperature(modelSettings.textBaseUrl, modelSettings.textModel, modelSettings.textProtocol, 0, modelSettings.kimiThinkingEnabled),
+    max_tokens: resolveTextCheckMaxTokens(modelSettings.textBaseUrl, modelSettings.textModel, modelSettings.textProtocol),
+    ...buildKimiThinkingPayload({
+      baseUrl: modelSettings.textBaseUrl,
+      model: modelSettings.textModel,
+      textProtocol: modelSettings.textProtocol,
+      kimiThinkingEnabled: modelSettings.kimiThinkingEnabled
+    }),
     messages: [
       {
         role: "system",
@@ -276,6 +298,13 @@ async function checkTextModelAvailability(modelSettingsInput = {}) {
   const reasoning = extractAssistantReasoning(response.data);
   const parsed = extractJsonObject(content);
   if (!content || !parsed || parsed.ok !== true) {
+    const finishReason = response?.data?.choices?.[0]?.finish_reason || "";
+    if (!content && reasoning && finishReason === "length") {
+      throw new GenerationFailedError("文本模型检测只返回了推理内容，未在限制内产出最终 JSON；请调大检测 token 上限或改用非推理型模型。", {
+        code: "text_model_check_truncated",
+        retryable: false
+      });
+    }
     throw new GenerationFailedError("文本模型检测未返回可解析的 JSON 内容，当前模型不兼容生成链路。", {
       code: "text_model_incompatible",
       retryable: false
@@ -616,8 +645,20 @@ async function postChatCompletion(payload, timeoutMs) {
 async function requestTextPayload(prompt, timeoutMs) {
   const basePayload = {
     model: config.openai.textModel,
-    temperature: 1,
+    temperature: resolveTextTemperature(
+      config.openai.baseUrl,
+      config.openai.textModel,
+      inferTextProtocol(config.openai.baseUrl, config.openai.textModel, config.openai.textProtocol),
+      1,
+      config.openai.kimiThinkingEnabled
+    ),
     max_tokens: TEXT_MODEL_MAX_TOKENS,
+    ...buildKimiThinkingPayload({
+      baseUrl: config.openai.baseUrl,
+      model: config.openai.textModel,
+      textProtocol: config.openai.textProtocol,
+      kimiThinkingEnabled: config.openai.kimiThinkingEnabled
+    }),
     messages: [
       {
         role: "system",
@@ -661,6 +702,14 @@ async function requestTextPayload(prompt, timeoutMs) {
   }
 }
 
+function pickRandomTopic(topics = []) {
+  if (!topics.length) {
+    return null;
+  }
+  const index = Math.floor(Math.random() * topics.length);
+  return topics[index] || topics[0] || null;
+}
+
 async function decideGenerationStrategy(schedule) {
   const selectedCategories = getCategoriesByIds(schedule.contentCategoryIds);
   const topicContext = await buildTopicContext({
@@ -669,12 +718,30 @@ async function decideGenerationStrategy(schedule) {
     schedule
   });
 
+  if (!topicContext.topics.length) {
+    return {
+      mode: selectedCategories.length ? "topic-source-match" : "topic-source-open",
+      selectedCategories,
+      candidateTopics: [],
+      selectedTopic: null,
+      topics: [],
+      contexts: [],
+      sourceRuns: topicContext.sourceRuns,
+      matchedByKeyword: []
+    };
+  }
+
   if (!selectedCategories.length) {
+    const selectedTopic = pickRandomTopic(topicContext.topics);
     return {
       mode: "topic-source-open",
       selectedCategories,
-      topics: topicContext.topics,
-      contexts: topicContext.contexts,
+      candidateTopics: topicContext.topics,
+      selectedTopic,
+      topics: selectedTopic ? [selectedTopic] : [],
+      contexts: selectedTopic
+        ? topicContext.contexts.filter((item) => item.keyword === selectedTopic.keyword)
+        : [],
       sourceRuns: topicContext.sourceRuns,
       matchedByKeyword: []
     };
@@ -685,28 +752,19 @@ async function decideGenerationStrategy(schedule) {
     schedule.contentCategoryIds
   );
 
-  if (matchResult.matchedTopics.length) {
-    const matchedKeywords = new Set(matchResult.matchedTopics.map((item) => item.keyword));
-    return {
-      mode: "topic-source-match",
-      selectedCategories,
-      topics: matchResult.matchedTopics,
-      contexts: topicContext.contexts.filter((item) => matchedKeywords.has(item.keyword)),
-      sourceRuns: topicContext.sourceRuns,
-      allTopics: topicContext.topics,
-      matchedByKeyword: matchResult.matchedByKeyword
-    };
-  }
-
-  const categoryContexts = await buildCategoryNewsContext(schedule.contentCategoryIds);
+  const selectedTopic = pickRandomTopic(matchResult.matchedTopics);
   return {
-    mode: "category-freeform",
+    mode: "topic-source-match",
     selectedCategories,
-    topics: topicContext.topics,
-    contexts: topicContext.contexts,
-    categoryContexts,
+    candidateTopics: matchResult.matchedTopics,
+    selectedTopic,
+    topics: selectedTopic ? [selectedTopic] : [],
+    contexts: selectedTopic
+      ? topicContext.contexts.filter((item) => item.keyword === selectedTopic.keyword)
+      : [],
     sourceRuns: topicContext.sourceRuns,
-    matchedByKeyword: []
+    allTopics: topicContext.topics,
+    matchedByKeyword: matchResult.matchedByKeyword
   };
 }
 
@@ -718,77 +776,43 @@ function buildPrompt(slotTime, strategy, schedule, retryContext = null) {
   const schema = config.openai.imageModel
     ? `{"topic":"...", "copy":"...", "image_count":1-${schedule.maxImageCount}, "image_prompts":["...", "..."]}`
     : '{"topic":"...", "copy":"..."}';
-
-  if (strategy.mode === "category-freeform") {
-    const categoryNews = strategy.categoryContexts
-      .map(
-        (item) =>
-          `板块：${item.categoryName}\n说明：${item.description}\n最新资讯：\n${formatNewsLines(item.news)}`
-      )
-      .join("\n\n");
-
-    return [
-      `发布时间槽位：${slotTime.format("YYYY-MM-DD HH:mm")} ${config.timezone}`,
-      `用户选定板块：${categoriesLine}`,
-      `启用的话题来源及优先级：${sourceLine}`,
-      retryContext ? `上一次生成未通过：${retryContext.reason}。这一次必须严格修正。` : null,
-      "当前多来源话题候选没有明显命中这些板块，请基于这些板块的最新资讯自由发挥，生成一条时效性微博。",
-      categoryNews || "暂无板块资讯",
-      `返回 JSON，结构为：${schema}`,
-      "要求：",
-      "1. topic 字段写你最终选择的板块或核心话题",
-      `2. 文案控制在 ${buildCopyLengthHint(schedule)} 个中文字符`,
-      "3. 必须体现“正在发生”或“值得马上关注”的时效性",
-      "4. 不要编造事实，信息不足时用保守措辞",
-      "5. 带 1-2 个相关话题标签，不要堆砌",
-      ...buildNumberedRules(6, buildVoiceStyleRules(strategy.selectedCategories))
-    ].filter(Boolean).join("\n\n");
-  }
-
-  const topicLines = strategy.topics
-    .map(
-      (item) =>
-        `${item.rank}. ${item.keyword} [来源:${item.sourceName}]${item.heat ? ` (热度:${item.heat})` : ""}${
-          item.label ? `, 标签:${item.label}` : ""
-        }`
-    )
-    .join("\n");
-  const contextLines = strategy.contexts
-    .map((topic) => `话题：${topic.keyword} [来源:${topic.sourceName}]\n${formatNewsLines(topic.news)}`)
-    .join("\n\n");
+  const selectedTopic = strategy.selectedTopic || strategy.topics[0] || null;
+  const selectedContext = strategy.contexts[0] || null;
+  const selectedTopicLine = selectedTopic
+    ? `${selectedTopic.keyword} [来源:${selectedTopic.sourceName}]${selectedTopic.heat ? ` (热度:${selectedTopic.heat})` : ""}${selectedTopic.label ? `, 标签:${selectedTopic.label}` : ""}`
+    : "无";
+  const selectedContextLine = selectedContext
+    ? `话题：${selectedContext.keyword} [来源:${selectedContext.sourceName}]\n${formatNewsLines(selectedContext.news)}`
+    : "暂无补充资讯";
   const matchLines = strategy.matchedByKeyword.length
     ? strategy.matchedByKeyword
         .map((item) => `${item.keyword} -> ${item.categoryIds.join(", ")}${item.reason ? ` (${item.reason})` : ""}`)
         .join("\n")
-    : "未做板块过滤";
-
-  const strategyHint =
-    strategy.mode === "topic-source-match"
-      ? "你必须优先从下面这些已命中用户板块的话题候选中选择一个来写。若多个候选都合适，优先选来源优先级更高的。"
-      : "请从下面多来源候选中选择最值得发的一条来写，优先考虑来源优先级更高且信息更完整的话题。";
+    : (strategy.selectedCategories.length ? "未命中任何板块" : "未做板块过滤");
 
   return [
     `发布时间槽位：${slotTime.format("YYYY-MM-DD HH:mm")} ${config.timezone}`,
     `用户选定板块：${categoriesLine}`,
     `启用的话题来源及优先级：${sourceLine}`,
     retryContext ? `上一次生成未通过：${retryContext.reason}。这一次必须严格修正。` : null,
-    strategyHint,
-    "话题候选：",
-    topicLines || "暂无话题候选",
+    `已保留 ${strategy.candidateTopics?.length || 0} 个符合主题的词条，本次随机选中这 1 个词条来写，禁止切换到其他词条或自由发挥。`,
+    "本次唯一允许使用的词条：",
+    selectedTopicLine,
     "板块匹配结果：",
     matchLines,
-    "相关资讯摘要：",
-    contextLines || "暂无补充资讯",
+    "该词条相关资讯：",
+    selectedContextLine,
     `返回 JSON，结构为：${schema}`,
     "要求：",
-    "1. topic 字段必须写你最终采用的话题词",
+    "1. topic 字段必须写本次选中的词条原文，不能改成别的主题",
     `2. 文案控制在 ${buildCopyLengthHint(schedule)} 个中文字符，适合微博发布`,
-    "3. 不能只是复述标题，要有观点或信息增量",
-    "4. 不要编造事实；上下文不足时使用保守措辞",
-    "5. 带 1-2 个相关话题标签，不要堆砌",
-    "6. 如果有图片提示词，需要和所选话题强相关",
-    "7. image_prompts 必须按图片顺序给出 1-N 条不同提示词，每张图都要有不同的主体、景别、构图或重点，不能只是同义改写",
-    ...buildNumberedRules(8, buildVoiceStyleRules(strategy.selectedCategories))
+    "3. 正文只能围绕这个词条展开，不能跳到其他热点，也不能泛泛而谈",
+    "4. 不能只是复述标题，要有观点或信息增量",
+    "5. 不要编造事实；上下文不足时使用保守措辞",
+    "6. 带 1-2 个相关话题标签，不要堆砌",
+    "7. 如果有图片提示词，需要和所选词条强相关",
+    "8. image_prompts 必须按图片顺序给出 1-N 条不同提示词，每张图都要有不同的主体、景别、构图或重点，不能只是同义改写",
+    ...buildNumberedRules(9, buildVoiceStyleRules(strategy.selectedCategories))
   ].filter(Boolean).join("\n\n");
 }
 
@@ -1092,9 +1116,17 @@ async function generateDraftPayload(slotTime) {
     throw toGenerationError(error, "话题检索失败，未生成微博草稿。");
   }
 
-  if (!strategy.topics.length && !strategy.selectedCategories.length) {
-    throw new GenerationFailedError("当前没有可用的话题来源结果，未生成微博草稿。", {
-      code: "no_topic_candidates"
+  if (!strategy.candidateTopics?.length) {
+    throw new GenerationFailedError("当前没有抓到任何可用词条，未生成微博草稿。", {
+      code: "no_topic_candidates",
+      retryable: false
+    });
+  }
+
+  if (!strategy.selectedTopic) {
+    throw new GenerationFailedError("当前没有符合主题的词条，未生成微博草稿。", {
+      code: "no_matching_topics",
+      retryable: false
     });
   }
 

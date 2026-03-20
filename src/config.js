@@ -1,11 +1,20 @@
 const path = require("path");
 
 const rootDir = path.resolve(__dirname, "..");
+const textBaseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
+const textModel = process.env.OPENAI_TEXT_MODEL || "gpt-4o-mini";
+const textProtocol = String(
+  process.env.OPENAI_TEXT_PROTOCOL
+    || ((/api\.moonshot\.cn/i.test(textBaseUrl) || /^kimi-/i.test(textModel)) ? "moonshot" : "openai")
+).toLowerCase() === "moonshot"
+  ? "moonshot"
+  : "openai";
+const kimiThinkingEnabled = String(process.env.KIMI_THINKING_ENABLED || "true").toLowerCase() !== "false";
 const imageProtocol = String(process.env.OPENAI_IMAGE_PROTOCOL || "openai").toLowerCase();
 const imageBaseUrl = process.env.OPENAI_IMAGE_BASE_URL
   || (imageProtocol === "dashscope"
     ? "https://dashscope.aliyuncs.com/api/v1"
-    : process.env.OPENAI_BASE_URL || "https://api.openai.com/v1");
+    : textBaseUrl);
 
 module.exports = {
   rootDir,
@@ -17,8 +26,10 @@ module.exports = {
   dbPath: path.join(rootDir, "data", "weibo_manager.db"),
   openai: {
     apiKey: process.env.OPENAI_API_KEY || "",
-    baseUrl: process.env.OPENAI_BASE_URL || "https://api.openai.com/v1",
-    textModel: process.env.OPENAI_TEXT_MODEL || "gpt-4o-mini",
+    baseUrl: textBaseUrl,
+    textProtocol,
+    textModel,
+    kimiThinkingEnabled,
     imageApiKey: process.env.OPENAI_IMAGE_API_KEY || process.env.OPENAI_API_KEY || "",
     imageBaseUrl,
     imageProtocol,

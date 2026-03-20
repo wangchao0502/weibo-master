@@ -9,12 +9,15 @@ const {
   normalizeTopicSourceConfigs,
   getTopicSourceById
 } = require("../topicSources");
+const { inferTextProtocol, normalizeTextProtocol } = require("./modelCompat");
 
 
 const DEFAULT_MODEL_SETTINGS = {
   textApiKey: config.openai.apiKey,
   textBaseUrl: config.openai.baseUrl,
+  textProtocol: config.openai.textProtocol,
   textModel: config.openai.textModel,
+  kimiThinkingEnabled: config.openai.kimiThinkingEnabled,
   imageApiKey: process.env.OPENAI_IMAGE_API_KEY !== undefined
     ? process.env.OPENAI_IMAGE_API_KEY
     : config.openai.imageApiKey,
@@ -32,9 +35,17 @@ function normalizeModelSettings(input = {}) {
   const textBaseUrl = String(
     input.textBaseUrl === undefined ? DEFAULT_MODEL_SETTINGS.textBaseUrl : input.textBaseUrl
   ).trim();
+  const textProtocol = inferTextProtocol(
+    textBaseUrl,
+    input.textModel === undefined ? DEFAULT_MODEL_SETTINGS.textModel : input.textModel,
+    input.textProtocol === undefined ? DEFAULT_MODEL_SETTINGS.textProtocol : input.textProtocol
+  );
   const textModel = String(
     input.textModel === undefined ? DEFAULT_MODEL_SETTINGS.textModel : input.textModel
   ).trim();
+  const kimiThinkingEnabled = input.kimiThinkingEnabled === undefined
+    ? Boolean(DEFAULT_MODEL_SETTINGS.kimiThinkingEnabled)
+    : Boolean(input.kimiThinkingEnabled);
   const imageApiKey = String(
     input.imageApiKey === undefined ? DEFAULT_MODEL_SETTINGS.imageApiKey : input.imageApiKey
   ).trim();
@@ -54,6 +65,9 @@ function normalizeModelSettings(input = {}) {
   if (imageBaseUrl && !/^https?:\/\//i.test(imageBaseUrl)) {
     throw new Error("imageBaseUrl must start with http:// or https://.");
   }
+  if (!["openai", "moonshot"].includes(normalizeTextProtocol(textProtocol))) {
+    throw new Error("textProtocol must be one of: openai, moonshot.");
+  }
   if (!["openai", "dashscope"].includes(imageProtocol)) {
     throw new Error("imageProtocol must be one of: openai, dashscope.");
   }
@@ -61,7 +75,9 @@ function normalizeModelSettings(input = {}) {
   return {
     textApiKey,
     textBaseUrl,
+    textProtocol,
     textModel,
+    kimiThinkingEnabled,
     imageApiKey,
     imageBaseUrl,
     imageProtocol,
@@ -74,6 +90,8 @@ function buildEffectiveModelSettings(input = {}) {
   const textApiKey = normalized.textApiKey || DEFAULT_MODEL_SETTINGS.textApiKey || "";
   const textBaseUrl = normalized.textBaseUrl || DEFAULT_MODEL_SETTINGS.textBaseUrl || "https://api.openai.com/v1";
   const textModel = normalized.textModel || DEFAULT_MODEL_SETTINGS.textModel || "gpt-4o-mini";
+  const textProtocol = inferTextProtocol(textBaseUrl, textModel, normalized.textProtocol || DEFAULT_MODEL_SETTINGS.textProtocol || "openai");
+  const kimiThinkingEnabled = normalized.kimiThinkingEnabled !== false;
   const imageProtocol = normalized.imageProtocol || DEFAULT_MODEL_SETTINGS.imageProtocol || "openai";
   const imageApiKey = normalized.imageApiKey || textApiKey;
   const imageBaseUrl = normalized.imageBaseUrl || (imageProtocol === "dashscope"
@@ -84,7 +102,9 @@ function buildEffectiveModelSettings(input = {}) {
   return {
     textApiKey,
     textBaseUrl,
+    textProtocol,
     textModel,
+    kimiThinkingEnabled,
     imageApiKey,
     imageBaseUrl,
     imageProtocol,
@@ -97,7 +117,9 @@ function applyModelSettingsToRuntime(modelSettings) {
   const effective = buildEffectiveModelSettings(modelSettings);
   config.openai.apiKey = effective.textApiKey;
   config.openai.baseUrl = effective.textBaseUrl;
+  config.openai.textProtocol = effective.textProtocol;
   config.openai.textModel = effective.textModel;
+  config.openai.kimiThinkingEnabled = effective.kimiThinkingEnabled;
   config.openai.imageApiKey = effective.imageApiKey;
   config.openai.imageBaseUrl = effective.imageBaseUrl;
   config.openai.imageProtocol = effective.imageProtocol;
@@ -327,7 +349,9 @@ async function updateModelSettings(input) {
   );
   logger.info("settings", "model settings updated", {
     textBaseUrl: modelSettings.textBaseUrl,
+    textProtocol: modelSettings.textProtocol,
     textModel: modelSettings.textModel,
+    kimiThinkingEnabled: modelSettings.kimiThinkingEnabled,
     imageBaseUrl: modelSettings.imageBaseUrl,
     imageProtocol: modelSettings.imageProtocol,
     imageModel: modelSettings.imageModel

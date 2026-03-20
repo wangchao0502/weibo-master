@@ -169,7 +169,9 @@ async function initSchema(db) {
       JSON.stringify({
         textApiKey: config.openai.apiKey,
         textBaseUrl: config.openai.baseUrl,
+        textProtocol: config.openai.textProtocol,
         textModel: config.openai.textModel,
+        kimiThinkingEnabled: config.openai.kimiThinkingEnabled,
         imageApiKey: process.env.OPENAI_IMAGE_API_KEY !== undefined
           ? process.env.OPENAI_IMAGE_API_KEY
           : config.openai.imageApiKey,
