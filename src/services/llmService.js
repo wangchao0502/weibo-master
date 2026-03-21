@@ -2,7 +2,7 @@ const axios = require("axios");
 const config = require("../config");
 const { now } = require("../time");
 const { getScheduleSettings, buildEffectiveModelSettings } = require("./settingsService");
-const { buildTopicContext } = require("./hotTopicService");
+const { buildTopicContext, buildRichTopicContext } = require("./hotTopicService");
 const { matchTopicCandidatesToCategories } = require("./categoryService");
 const { getCategoriesByIds } = require("../contentCategories");
 const { getCopyStyleById } = require("../copyStyles");
@@ -205,10 +205,35 @@ function formatNewsLines(news = []) {
     return "暂无补充资讯";
   }
   return news
-    .map((item, index) => `${index + 1}) ${item.title}${item.pubDate ? ` | ${item.pubDate}` : ""}`)
+    .map((item, index) => {
+      const summary = normalizeInlineText(item.description || "");
+      return `${index + 1}) ${item.title}${item.pubDate ? ` | ${item.pubDate}` : ""}${summary ? ` | 摘要:${summary.slice(0, 90)}` : ""}`;
+    })
     .join("\n");
 }
 
+function formatSnippetLines(snippets = []) {
+  if (!snippets.length) {
+    return "暂无搜索召回";
+  }
+  return snippets
+    .map((item, index) => `${index + 1}) ${normalizeInlineText(item.title || item.source || "线索")} | ${normalizeInlineText(item.snippet || "").slice(0, 120)}`)
+    .join("\n");
+}
+
+function buildTopicEvidenceText(context) {
+  if (!context) {
+    return "暂无补充资讯";
+  }
+
+  return [
+    Array.isArray(context.sourceFacts) && context.sourceFacts.length
+      ? `原始来源线索：\n${context.sourceFacts.map((item, index) => `${index + 1}) ${item}`).join("\n")}`
+      : null,
+    `新闻检索召回：\n${formatNewsLines(context.news || [])}`,
+    `搜索召回：\n${formatSnippetLines(context.snippets || [])}`
+  ].filter(Boolean).join("\n\n");
+}
 
 function normalizeCheckModelSettings(modelSettingsInput = {}) {
   const effective = buildEffectiveModelSettings(modelSettingsInput);
@@ -742,15 +767,14 @@ async function decideGenerationStrategy(schedule) {
 
   if (!selectedCategories.length) {
     const selectedTopic = pickRandomTopic(topicContext.topics);
+    const selectedContext = selectedTopic ? await buildRichTopicContext(selectedTopic, schedule) : null;
     return {
       mode: "topic-source-open",
       selectedCategories,
       candidateTopics: topicContext.topics,
       selectedTopic,
       topics: selectedTopic ? [selectedTopic] : [],
-      contexts: selectedTopic
-        ? topicContext.contexts.filter((item) => item.keyword === selectedTopic.keyword)
-        : [],
+      contexts: selectedContext ? [selectedContext] : [],
       sourceRuns: topicContext.sourceRuns,
       matchedByKeyword: []
     };
@@ -762,15 +786,14 @@ async function decideGenerationStrategy(schedule) {
   );
 
   const selectedTopic = pickRandomTopic(matchResult.matchedTopics);
+  const selectedContext = selectedTopic ? await buildRichTopicContext(selectedTopic, schedule) : null;
   return {
     mode: "topic-source-match",
     selectedCategories,
     candidateTopics: matchResult.matchedTopics,
     selectedTopic,
     topics: selectedTopic ? [selectedTopic] : [],
-    contexts: selectedTopic
-      ? topicContext.contexts.filter((item) => item.keyword === selectedTopic.keyword)
-      : [],
+    contexts: selectedContext ? [selectedContext] : [],
     sourceRuns: topicContext.sourceRuns,
     allTopics: topicContext.topics,
     matchedByKeyword: matchResult.matchedByKeyword
@@ -791,7 +814,7 @@ function buildPrompt(slotTime, strategy, schedule, retryContext = null) {
     ? `${selectedTopic.keyword} [来源:${selectedTopic.sourceName}]${selectedTopic.heat ? ` (热度:${selectedTopic.heat})` : ""}${selectedTopic.label ? `, 标签:${selectedTopic.label}` : ""}`
     : "无";
   const selectedContextLine = selectedContext
-    ? `话题：${selectedContext.keyword} [来源:${selectedContext.sourceName}]\n${formatNewsLines(selectedContext.news)}`
+    ? `话题：${selectedContext.keyword} [来源:${selectedContext.sourceName}]\n\n${buildTopicEvidenceText(selectedContext)}`
     : "暂无补充资讯";
   const matchLines = strategy.matchedByKeyword.length
     ? strategy.matchedByKeyword

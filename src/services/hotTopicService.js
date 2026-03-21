@@ -6,8 +6,11 @@ const { getTopicSourceById, getEnabledTopicSourceConfigs } = require("../topicSo
 const WEIBO_HOT_SEARCH_URL = "https://weibo.com/ajax/side/hotSearch";
 const ZHIHU_HOT_URL = "https://www.zhihu.com/api/v3/feed/topstory/hot-lists/total";
 const GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss?hl=zh-CN&gl=CN&ceid=CN:zh-Hans";
+const SOGOU_WEB_SEARCH_URL = "https://www.sogou.com/web";
 const MAX_CONTEXT_TOPICS = 8;
 const NEWS_PER_TOPIC = 2;
+const RICH_CONTEXT_NEWS_COUNT = 4;
+const RICH_CONTEXT_SNIPPET_COUNT = 4;
 
 function safeText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -38,9 +41,9 @@ function parseTag(xml, tagName) {
   return match ? match[1] : "";
 }
 
-function parseNewsItems(xml) {
+function parseNewsItems(xml, limit = NEWS_PER_TOPIC) {
   const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
-  return items.slice(0, NEWS_PER_TOPIC).map((itemXml) => ({
+  return items.slice(0, limit).map((itemXml) => ({
     title: stripHtml(parseTag(itemXml, "title")),
     link: decodeXml(parseTag(itemXml, "link")),
     pubDate: stripHtml(parseTag(itemXml, "pubDate")),
@@ -153,10 +156,72 @@ async function fetchGoogleNewsTopics(count) {
   ).filter((item) => item.keyword);
 }
 
-async function fetchNewsContext(keyword) {
+async function fetchNewsContext(keyword, count = NEWS_PER_TOPIC) {
   const rssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(keyword)}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans`;
   const response = await axios.get(rssUrl, { timeout: 15000 });
-  return parseNewsItems(response.data);
+  return parseNewsItems(response.data, count);
+}
+
+function isBlockedSearchLink(link = "") {
+  const normalized = String(link || "").toLowerCase();
+  return [
+    "sogou.com",
+    "m.sogou.com",
+    "yuanbao.tencent.com",
+    "ima.qq.com"
+  ].some((item) => normalized.includes(item));
+}
+
+function isBlockedSearchTitle(title = "") {
+  const normalized = safeText(title);
+  return ["看看元宝怎么说", "看看ima怎么说", "精选视频"].some((item) => normalized.includes(item));
+}
+
+async function fetchSogouWebContext(keyword) {
+  const response = await axios.get(SOGOU_WEB_SEARCH_URL, {
+    params: { query: keyword },
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+      Referer: "https://www.sogou.com/",
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    },
+    timeout: 15000
+  });
+
+  const matches = Array.from(
+    response.data.matchAll(/<a[^>]+href="(?<link>https?:\/\/[^"]+)"[^>]*>(?<title>[\s\S]*?)<\/a>/gi)
+  );
+  const seen = new Set();
+  const results = [];
+
+  matches.forEach((match) => {
+    if (results.length >= RICH_CONTEXT_SNIPPET_COUNT) {
+      return;
+    }
+    const link = decodeXml(match.groups?.link || "");
+    const title = stripHtml(match.groups?.title || "");
+    const normalizedTitle = safeText(title);
+    if (!link || !normalizedTitle || normalizedTitle.length < 8) {
+      return;
+    }
+    if (isBlockedSearchLink(link) || isBlockedSearchTitle(normalizedTitle)) {
+      return;
+    }
+    const key = `${normalizedTitle}::${link}`;
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    results.push({
+      title: normalizedTitle,
+      snippet: normalizedTitle,
+      link,
+      source: "搜狗搜索"
+    });
+  });
+
+  return results;
 }
 
 async function fetchTopicsBySource(sourceId, count, schedule) {
@@ -290,6 +355,55 @@ async function buildTopicContext({ topicSources, topicLimit, schedule }) {
   };
 }
 
+async function buildRichTopicContext(topic) {
+  if (!topic) {
+    return null;
+  }
+
+  const [newsResult, searchResult] = await Promise.allSettled([
+    fetchNewsContext(topic.keyword, RICH_CONTEXT_NEWS_COUNT),
+    fetchSogouWebContext(topic.keyword)
+  ]);
+
+  const news = newsResult.status === 'fulfilled' ? newsResult.value : (Array.isArray(topic.news) ? topic.news : []);
+  const snippets = searchResult.status === 'fulfilled' ? searchResult.value : [];
+  const sourceFacts = [
+    topic.label ? `来源标签：${safeText(topic.label)}` : '',
+    topic.heat ? `来源热度：${topic.heat}` : '',
+    topic.sourceName ? `来源渠道：${topic.sourceName}` : ''
+  ].filter(Boolean);
+
+  if (newsResult.status === 'rejected') {
+    logger.warn('topics', 'rich news context fetch failed', {
+      keyword: topic.keyword,
+      sourceId: topic.sourceId,
+      error: newsResult.reason?.message || String(newsResult.reason || '')
+    });
+  }
+  if (searchResult.status === 'rejected') {
+    logger.warn('topics', 'rich search context fetch failed', {
+      keyword: topic.keyword,
+      sourceId: topic.sourceId,
+      error: searchResult.reason?.message || String(searchResult.reason || '')
+    });
+  }
+
+  logger.debug('topics', 'rich topic context built', {
+    keyword: topic.keyword,
+    sourceId: topic.sourceId,
+    newsCount: news.length,
+    snippetCount: snippets.length,
+    sourceFacts
+  });
+
+  return {
+    ...topic,
+    news,
+    snippets,
+    sourceFacts
+  };
+}
+
 async function buildCategoryNewsContext(categoryIds) {
   const categories = getCategoriesByIds(categoryIds);
   const contexts = await Promise.all(
@@ -322,5 +436,7 @@ async function buildCategoryNewsContext(categoryIds) {
 
 module.exports = {
   buildTopicContext,
-  buildCategoryNewsContext
+  buildRichTopicContext,
+  buildCategoryNewsContext,
+  fetchNewsContext
 };
