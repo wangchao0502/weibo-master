@@ -10,6 +10,7 @@ const {
   getTopicSourceById
 } = require("../topicSources");
 const { inferTextProtocol, normalizeTextProtocol } = require("./modelCompat");
+const { COPY_STYLE_OPTIONS, getCopyStyleById } = require("../copyStyles");
 
 
 const DEFAULT_MODEL_SETTINGS = {
@@ -138,6 +139,7 @@ const DEFAULT_SCHEDULE = {
   weiboHotSearchStartRank: 1,
   weiboHotSearchEndRank: 20,
   notificationPushEnabled: true,
+  copyStyle: "balanced",
   copyMinLength: 200,
   copyMaxLength: 500,
   llmTimeoutMs: config.openai.requestTimeoutMs,
@@ -199,6 +201,9 @@ function normalizeSchedule(input = {}) {
     input.notificationPushEnabled === undefined
       ? DEFAULT_SCHEDULE.notificationPushEnabled
       : Boolean(input.notificationPushEnabled);
+  const copyStyle = getCopyStyleById(
+    input.copyStyle === undefined ? DEFAULT_SCHEDULE.copyStyle : input.copyStyle
+  ).id;
   const copyMinLength = parseInteger(input.copyMinLength, DEFAULT_SCHEDULE.copyMinLength);
   const copyMaxLength = parseInteger(input.copyMaxLength, DEFAULT_SCHEDULE.copyMaxLength);
   const llmTimeoutMs = parseInteger(input.llmTimeoutMs, DEFAULT_SCHEDULE.llmTimeoutMs);
@@ -285,6 +290,7 @@ function normalizeSchedule(input = {}) {
     weiboHotSearchStartRank,
     weiboHotSearchEndRank,
     notificationPushEnabled,
+    copyStyle,
     copyMinLength,
     copyMaxLength,
     llmTimeoutMs,
@@ -408,6 +414,7 @@ module.exports = {
   DEFAULT_MODEL_SETTINGS,
   COMMON_CATEGORIES,
   TOPIC_SOURCES,
+  COPY_STYLE_OPTIONS,
   normalizeSchedule,
   normalizeModelSettings,
   buildEffectiveModelSettings,

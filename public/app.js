@@ -30,6 +30,7 @@ const dom = {
   notificationPushEnabled: document.getElementById("notificationPushEnabled"),
   copyMinLength: document.getElementById("copyMinLength"),
   copyMaxLength: document.getElementById("copyMaxLength"),
+  copyStyleSelector: document.getElementById("copyStyleSelector"),
   llmTimeoutMs: document.getElementById("llmTimeoutMs"),
   categoryTimeoutMs: document.getElementById("categoryTimeoutMs"),
   imageWidth: document.getElementById("imageWidth"),
@@ -71,6 +72,7 @@ const state = {
   schedule: null,
   availableCategories: [],
   availableTopicSources: [],
+  availableCopyStyles: [],
   drafts: [],
   refineOpenDraftId: null,
   refiningDraftId: null,
@@ -303,6 +305,30 @@ function renderBannerAccount(account) {
   dom.bannerSub.textContent = account.description || `UID: ${account.user_id || "-"}`;
 }
 
+function renderCopyStyleSelector(styles, selectedId) {
+  const options = Array.isArray(styles) ? styles : [];
+  const fallbackSelectedId = selectedId || "balanced";
+  dom.copyStyleSelector.innerHTML = options
+    .map((style) => {
+      const checked = style.id === fallbackSelectedId ? "checked" : "";
+      return `
+        <label class="copy-style-option">
+          <input type="radio" name="copyStyle" value="${escapeHtml(style.id)}" ${checked} />
+          <div class="copy-style-copy">
+            <span class="copy-style-name">${escapeHtml(style.name)}</span>
+            <span class="copy-style-desc">${escapeHtml(style.description)}</span>
+          </div>
+        </label>
+      `;
+    })
+    .join("");
+}
+
+function getSelectedCopyStyle() {
+  const checked = dom.copyStyleSelector.querySelector('input[name="copyStyle"]:checked');
+  return checked?.value || "balanced";
+}
+
 function renderCategorySelector(categories, selectedIds) {
   dom.categorySelector.innerHTML = categories
     .map((category) => {
@@ -471,13 +497,16 @@ function renderMetricsSummary(account) {
   `;
 }
 
-function renderSchedule(schedule, nextSlot, availableCategories, availableTopicSources) {
+function renderSchedule(schedule, nextSlot, availableCategories, availableTopicSources, availableCopyStyles) {
   state.schedule = schedule;
   if (availableCategories) {
     state.availableCategories = availableCategories;
   }
   if (availableTopicSources) {
     state.availableTopicSources = availableTopicSources;
+  }
+  if (availableCopyStyles) {
+    state.availableCopyStyles = availableCopyStyles;
   }
 
   dom.scheduleEnabled.checked = Boolean(schedule.enabled);
@@ -489,6 +518,7 @@ function renderSchedule(schedule, nextSlot, availableCategories, availableTopicS
   dom.notificationPushEnabled.checked = Boolean(schedule.notificationPushEnabled);
   dom.copyMinLength.value = schedule.copyMinLength;
   dom.copyMaxLength.value = schedule.copyMaxLength;
+  renderCopyStyleSelector(state.availableCopyStyles, schedule.copyStyle || "balanced");
   dom.llmTimeoutMs.value = schedule.llmTimeoutMs;
   dom.categoryTimeoutMs.value = schedule.categoryTimeoutMs;
   dom.imageWidth.value = schedule.imageWidth;
@@ -742,7 +772,8 @@ async function loadSchedule() {
     data.schedule,
     data.nextSlot,
     data.availableCategories || [],
-    data.availableTopicSources || []
+    data.availableTopicSources || [],
+    data.availableCopyStyles || []
   );
 }
 
@@ -759,6 +790,7 @@ async function saveSchedule() {
     notificationPushEnabled: dom.notificationPushEnabled.checked,
     copyMinLength: Number(dom.copyMinLength.value),
     copyMaxLength: Number(dom.copyMaxLength.value),
+    copyStyle: getSelectedCopyStyle(),
     googleNewsTopicCount,
     weiboHotSearchStartRank: weiboRange.weiboHotSearchStartRank,
     weiboHotSearchEndRank: weiboRange.weiboHotSearchEndRank,
@@ -779,7 +811,8 @@ async function saveSchedule() {
     data.schedule,
     data.nextSlot,
     state.availableCategories,
-    data.availableTopicSources || state.availableTopicSources
+    data.availableTopicSources || state.availableTopicSources,
+    data.availableCopyStyles || state.availableCopyStyles
   );
 }
 

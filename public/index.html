@@ -189,6 +189,11 @@
                   <span>正文最大字数</span>
                   <input id="copyMaxLength" type="number" min="50" max="1000" step="10" />
                 </label>
+                <div class="field field-span-2">
+                  <span>正文风格</span>
+                  <div class="hint">单选一种默认行文风格，生成和润色都会遵循这个风格。</div>
+                  <div id="copyStyleSelector" class="copy-style-selector"></div>
+                </div>
                 <label class="field">
                   <span>模型超时(ms)</span>
                   <input id="llmTimeoutMs" type="number" min="10000" max="180000" step="5000" />

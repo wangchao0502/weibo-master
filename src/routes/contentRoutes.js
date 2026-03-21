@@ -14,6 +14,7 @@ const {
 const {
   COMMON_CATEGORIES,
   TOPIC_SOURCES,
+  COPY_STYLE_OPTIONS,
   getScheduleSettings,
   updateScheduleSettings,
   getNextManagedPublishSlot
@@ -159,7 +160,8 @@ router.get("/settings", async (req, res) => {
       schedule,
       nextSlot: nextSlot.format(),
       availableCategories: COMMON_CATEGORIES,
-      availableTopicSources: TOPIC_SOURCES
+      availableTopicSources: TOPIC_SOURCES,
+      availableCopyStyles: COPY_STYLE_OPTIONS
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -170,7 +172,7 @@ router.put("/settings", async (req, res) => {
   try {
     const schedule = await updateScheduleSettings(req.body || {});
     const nextSlot = await getNextManagedPublishSlot(now());
-    res.json({ ok: true, schedule, nextSlot: nextSlot.format(), availableTopicSources: TOPIC_SOURCES });
+    res.json({ ok: true, schedule, nextSlot: nextSlot.format(), availableTopicSources: TOPIC_SOURCES, availableCopyStyles: COPY_STYLE_OPTIONS });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }

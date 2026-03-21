@@ -5,6 +5,7 @@ const { getScheduleSettings, buildEffectiveModelSettings } = require("./settings
 const { buildTopicContext } = require("./hotTopicService");
 const { matchTopicCandidatesToCategories } = require("./categoryService");
 const { getCategoriesByIds } = require("../contentCategories");
+const { getCopyStyleById } = require("../copyStyles");
 const logger = require("../logger");
 const {
   inferTextProtocol,
@@ -428,6 +429,14 @@ function buildNumberedRules(start, rules) {
   return rules.map((rule, index) => `${start + index}. ${rule}`);
 }
 
+function buildCopyStyleRules(copyStyleId = "balanced") {
+  const style = getCopyStyleById(copyStyleId);
+  return [
+    `本次正文风格使用“${style.name}”，要符合这个风格：${style.description}`,
+    ...style.promptRules
+  ];
+}
+
 function buildVoiceStyleRules(selectedCategories = []) {
   const selectedIds = selectedCategories.map((item) => item.id);
   const hasRigorous = selectedIds.some((id) => RIGOROUS_CATEGORY_IDS.has(id));
@@ -794,6 +803,7 @@ function buildPrompt(slotTime, strategy, schedule, retryContext = null) {
     `发布时间槽位：${slotTime.format("YYYY-MM-DD HH:mm")} ${config.timezone}`,
     `用户选定板块：${categoriesLine}`,
     `启用的话题来源及优先级：${sourceLine}`,
+    `用户指定正文风格：${getCopyStyleById(schedule.copyStyle).name}`,
     retryContext ? `上一次生成未通过：${retryContext.reason}。这一次必须严格修正。` : null,
     `已保留 ${strategy.candidateTopics?.length || 0} 个符合主题的词条，本次随机选中这 1 个词条来写，禁止切换到其他词条或自由发挥。`,
     "本次唯一允许使用的词条：",
@@ -812,7 +822,8 @@ function buildPrompt(slotTime, strategy, schedule, retryContext = null) {
     "6. 带 1-2 个相关话题标签，不要堆砌",
     "7. 如果有图片提示词，需要和所选词条强相关",
     "8. image_prompts 必须按图片顺序给出 1-N 条不同提示词，每张图都要有不同的主体、景别、构图或重点，不能只是同义改写",
-    ...buildNumberedRules(9, buildVoiceStyleRules(strategy.selectedCategories))
+    ...buildNumberedRules(9, buildVoiceStyleRules(strategy.selectedCategories)),
+    ...buildNumberedRules(9 + buildVoiceStyleRules(strategy.selectedCategories).length, buildCopyStyleRules(schedule.copyStyle))
   ].filter(Boolean).join("\n\n");
 }
 
@@ -974,6 +985,7 @@ ${draft.text || ""}`,
     `用户修改建议：
 ${suggestion}`,
     `当前草稿来源：${draft.source || "-"}`,
+    `当前要求正文风格：${getCopyStyleById(schedule.copyStyle).name}`,
     imageHint,
     `返回 JSON，结构为：${schema}`,
     "要求：",
@@ -985,7 +997,8 @@ ${suggestion}`,
     "6. 带 1-2 个相关话题标签，不要堆砌",
     "7. 如果返回图片提示词，需要和新的正文强相关",
     "8. image_prompts 必须按图片顺序给出多条不同提示词，每张图都要有不同重点，不能只换几个词",
-    ...buildNumberedRules(9, buildVoiceStyleRules(selectedCategories))
+    ...buildNumberedRules(9, buildVoiceStyleRules(selectedCategories)),
+    ...buildNumberedRules(9 + buildVoiceStyleRules(selectedCategories).length, buildCopyStyleRules(schedule.copyStyle))
   ].filter(Boolean).join("\n\n");
 }
 

@@ -143,6 +143,7 @@ async function initSchema(db) {
         weiboHotSearchStartRank: 1,
         weiboHotSearchEndRank: 20,
         notificationPushEnabled: true,
+        copyStyle: "balanced",
         copyMinLength: 200,
         copyMaxLength: 500,
         llmTimeoutMs: 60000,
