@@ -13,6 +13,11 @@ const { inferTextProtocol, normalizeTextProtocol } = require("./modelCompat");
 const { COPY_STYLE_OPTIONS, getCopyStyleById } = require("../copyStyles");
 
 
+const DEFAULT_WEIBO_SEARCH_SETTINGS = {
+  enabled: Boolean(config.weibo.searchEnabled),
+  cookie: String(config.weibo.searchCookie || "").trim()
+};
+
 const DEFAULT_MODEL_SETTINGS = {
   textApiKey: config.openai.apiKey,
   textBaseUrl: config.openai.baseUrl,
@@ -126,6 +131,19 @@ function applyModelSettingsToRuntime(modelSettings) {
   config.openai.imageProtocol = effective.imageProtocol;
   config.openai.imageModel = effective.imageModel;
   return effective;
+}
+
+function normalizeWeiboSearchSettings(input = {}) {
+  const enabled = input.enabled === undefined ? DEFAULT_WEIBO_SEARCH_SETTINGS.enabled : Boolean(input.enabled);
+  const cookie = String(input.cookie === undefined ? DEFAULT_WEIBO_SEARCH_SETTINGS.cookie : input.cookie).trim();
+  return { enabled, cookie };
+}
+
+function applyWeiboSearchSettingsToRuntime(weiboSearchSettings) {
+  const normalized = normalizeWeiboSearchSettings(weiboSearchSettings);
+  config.weibo.searchEnabled = normalized.enabled;
+  config.weibo.searchCookie = normalized.cookie;
+  return normalized;
 }
 
 const DEFAULT_SCHEDULE = {
@@ -340,6 +358,45 @@ async function getEffectiveModelSettings() {
   return applyModelSettingsToRuntime(await getModelSettings());
 }
 
+async function getWeiboSearchSettings() {
+  const db = await getDb();
+  const row = await db.get(`SELECT value FROM system_settings WHERE key = 'weibo_search_settings'`);
+  if (!row) {
+    const weiboSearchSettings = normalizeWeiboSearchSettings(DEFAULT_WEIBO_SEARCH_SETTINGS);
+    applyWeiboSearchSettingsToRuntime(weiboSearchSettings);
+    return weiboSearchSettings;
+  }
+  try {
+    const weiboSearchSettings = normalizeWeiboSearchSettings(JSON.parse(row.value));
+    applyWeiboSearchSettingsToRuntime(weiboSearchSettings);
+    return weiboSearchSettings;
+  } catch (_) {
+    const weiboSearchSettings = normalizeWeiboSearchSettings(DEFAULT_WEIBO_SEARCH_SETTINGS);
+    applyWeiboSearchSettingsToRuntime(weiboSearchSettings);
+    return weiboSearchSettings;
+  }
+}
+
+async function updateWeiboSearchSettings(input) {
+  const db = await getDb();
+  const weiboSearchSettings = normalizeWeiboSearchSettings(input);
+  applyWeiboSearchSettingsToRuntime(weiboSearchSettings);
+  const ts = now().format();
+  await db.run(
+    `INSERT INTO system_settings (key, value, updated_at)
+     VALUES ('weibo_search_settings', ?, ?)
+     ON CONFLICT(key) DO UPDATE SET
+       value = excluded.value,
+       updated_at = excluded.updated_at`,
+    [JSON.stringify(weiboSearchSettings), ts]
+  );
+  logger.info("settings", "weibo search settings updated", {
+    enabled: weiboSearchSettings.enabled,
+    hasCookie: Boolean(weiboSearchSettings.cookie)
+  });
+  return weiboSearchSettings;
+}
+
 async function updateModelSettings(input) {
   const db = await getDb();
   const modelSettings = normalizeModelSettings(input);
@@ -412,6 +469,7 @@ async function getNextManagedPublishSlot(baseTime = now()) {
 module.exports = {
   DEFAULT_SCHEDULE,
   DEFAULT_MODEL_SETTINGS,
+  DEFAULT_WEIBO_SEARCH_SETTINGS,
   COMMON_CATEGORIES,
   TOPIC_SOURCES,
   COPY_STYLE_OPTIONS,
@@ -419,11 +477,15 @@ module.exports = {
   normalizeModelSettings,
   buildEffectiveModelSettings,
   applyModelSettingsToRuntime,
+  normalizeWeiboSearchSettings,
+  applyWeiboSearchSettingsToRuntime,
   getScheduleSettings,
   getModelSettings,
   getEffectiveModelSettings,
+  getWeiboSearchSettings,
   updateScheduleSettings,
   updateModelSettings,
+  updateWeiboSearchSettings,
   isManagedPublishSlot,
   getTriggeredPublishSlot,
   getNextManagedPublishSlot

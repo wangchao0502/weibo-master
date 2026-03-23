@@ -312,6 +312,32 @@
                 </section>
               </div>
             </section>
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2>微博正文召回</h2>
+                  <div class="hint">启用后会优先从微博直连召回短文本片段，失败时再回退到国内搜索。</div>
+                </div>
+                <div class="actions">
+                  <button id="btnSaveWeiboSearchSettings">保存微博召回配置</button>
+                </div>
+              </div>
+              <div class="form-grid compact-form-grid">
+                <label class="field checkbox-field field-span-2">
+                  <span>启用微博正文召回</span>
+                  <input id="weiboSearchEnabled" type="checkbox" />
+                </label>
+                <label class="field field-span-2">
+                  <span>微博 Cookie</span>
+                  <textarea id="weiboSearchCookie" rows="5" placeholder="粘贴完整微博 Cookie，用于直连搜索召回微博正文片段"></textarea>
+                </label>
+              </div>
+              <div class="actions">
+                <button id="btnCheckWeiboSearch" class="secondary" type="button">检查 Cookie 可用性</button>
+              </div>
+              <div id="weiboSearchCheckStatus" class="hint">微博召回状态：未检查</div>
+            </section>
+
           </section>
 
           <aside class="sidebar">

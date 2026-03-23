@@ -185,6 +185,20 @@ async function initSchema(db) {
       ts
     ]
   );
+
+
+  await db.run(
+    `INSERT INTO system_settings (key, value, updated_at)
+     SELECT 'weibo_search_settings', ?, ?
+     WHERE NOT EXISTS (SELECT 1 FROM system_settings WHERE key = 'weibo_search_settings')`,
+    [
+      JSON.stringify({
+        enabled: Boolean(config.weibo.searchEnabled),
+        cookie: String(config.weibo.searchCookie || '').trim()
+      }),
+      ts
+    ]
+  );
 }
 
 async function getDb() {

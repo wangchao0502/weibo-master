@@ -46,8 +46,11 @@ const dom = {
   imageApiKey: document.getElementById("imageApiKey"),
   imageBaseUrl: document.getElementById("imageBaseUrl"),
   imageModel: document.getElementById("imageModel"),
+  weiboSearchEnabled: document.getElementById("weiboSearchEnabled"),
+  weiboSearchCookie: document.getElementById("weiboSearchCookie"),
   textModelCheckStatus: document.getElementById("textModelCheckStatus"),
   imageModelCheckStatus: document.getElementById("imageModelCheckStatus"),
+  weiboSearchCheckStatus: document.getElementById("weiboSearchCheckStatus"),
   btnLogin: document.getElementById("btnLogin"),
   btnSyncAccount: document.getElementById("btnSyncAccount"),
   btnGenerate: document.getElementById("btnGenerate"),
@@ -59,6 +62,8 @@ const dom = {
   btnSaveModelSettings: document.getElementById("btnSaveModelSettings"),
   btnCheckTextModel: document.getElementById("btnCheckTextModel"),
   btnCheckImageModel: document.getElementById("btnCheckImageModel"),
+  btnSaveWeiboSearchSettings: document.getElementById("btnSaveWeiboSearchSettings"),
+  btnCheckWeiboSearch: document.getElementById("btnCheckWeiboSearch"),
   btnRefreshAll: document.getElementById("btnRefreshAll"),
   btnSaveSchedule: document.getElementById("btnSaveSchedule"),
   btnCloseModal: document.getElementById("btnCloseModal"),
@@ -282,6 +287,42 @@ async function checkModelAvailability(type) {
     body: JSON.stringify(collectModelSettings())
   });
   statusHost.textContent = `${type === "image" ? "图片模型" : "文本模型"}状态：可用 (${data.result.model})`;
+}
+
+function collectWeiboSearchSettings() {
+  return {
+    enabled: dom.weiboSearchEnabled.checked,
+    cookie: dom.weiboSearchCookie.value.trim()
+  };
+}
+
+function renderWeiboSearchSettings(weiboSearchSettings = {}) {
+  dom.weiboSearchEnabled.checked = Boolean(weiboSearchSettings.enabled);
+  dom.weiboSearchCookie.value = weiboSearchSettings.cookie || "";
+}
+
+async function loadWeiboSearchSettings() {
+  const data = await jsonFetch("/api/system/weibo-search-settings");
+  renderWeiboSearchSettings(data.weiboSearchSettings || {});
+}
+
+async function saveWeiboSearchSettings() {
+  const data = await jsonFetch("/api/system/weibo-search-settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(collectWeiboSearchSettings())
+  });
+  renderWeiboSearchSettings(data.weiboSearchSettings || {});
+}
+
+async function checkWeiboSearchAvailability() {
+  dom.weiboSearchCheckStatus.textContent = "微博召回状态：正在检查...";
+  const data = await jsonFetch("/api/system/weibo-search-settings/check", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(collectWeiboSearchSettings())
+  });
+  dom.weiboSearchCheckStatus.textContent = `微博召回状态：可用（召回 ${data.result.resultCount} 条）`;
 }
 
 function renderDraftSummary(filteredCount, summary) {
@@ -930,6 +971,7 @@ async function refreshAll() {
   const tasks = [
     loadSchedule(),
     loadModelSettings(),
+    loadWeiboSearchSettings(),
     loadAccount(),
     loadDrafts(state.draftFilter),
     loadNotifications(),
@@ -1082,6 +1124,15 @@ dom.btnSaveModelSettings.addEventListener("click", async () => {
   }
 });
 
+dom.btnSaveWeiboSearchSettings.addEventListener("click", async () => {
+  try {
+    await saveWeiboSearchSettings();
+    dom.weiboSearchCheckStatus.textContent = "微博召回状态：配置已保存";
+  } catch (error) {
+    alert(error.message);
+  }
+});
+
 dom.btnCheckTextModel.addEventListener("click", async () => {
   try {
     await checkModelAvailability("text");
@@ -1096,6 +1147,15 @@ dom.btnCheckImageModel.addEventListener("click", async () => {
     await checkModelAvailability("image");
   } catch (error) {
     dom.imageModelCheckStatus.textContent = `图片模型状态：不可用 (${error.message})`;
+    alert(error.message);
+  }
+});
+
+dom.btnCheckWeiboSearch.addEventListener("click", async () => {
+  try {
+    await checkWeiboSearchAvailability();
+  } catch (error) {
+    dom.weiboSearchCheckStatus.textContent = `微博召回状态：不可用 (${error.message})`;
     alert(error.message);
   }
 });

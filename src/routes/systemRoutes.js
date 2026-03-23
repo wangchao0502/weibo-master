@@ -1,8 +1,18 @@
 const express = require("express");
 const { backupDatabase, listBackups } = require("../services/backupService");
 const { sendTestNotification } = require("../services/notificationService");
-const { getModelSettings, getEffectiveModelSettings, updateModelSettings, normalizeModelSettings, buildEffectiveModelSettings } = require("../services/settingsService");
+const {
+  getModelSettings,
+  getEffectiveModelSettings,
+  updateModelSettings,
+  normalizeModelSettings,
+  buildEffectiveModelSettings,
+  getWeiboSearchSettings,
+  updateWeiboSearchSettings,
+  normalizeWeiboSearchSettings
+} = require("../services/settingsService");
 const { checkTextModelAvailability, checkImageModelAvailability } = require("../services/llmService");
+const { checkWeiboSearchCookieAvailability } = require("../services/hotTopicService");
 
 const router = express.Router();
 
@@ -63,6 +73,35 @@ router.post("/model-settings/check-image", async (req, res) => {
   try {
     const modelSettings = buildEffectiveModelSettings(normalizeModelSettings(req.body || {}));
     const result = await checkImageModelAvailability(modelSettings);
+    res.json({ ok: true, result });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+
+router.get("/weibo-search-settings", async (req, res) => {
+  try {
+    const weiboSearchSettings = await getWeiboSearchSettings();
+    res.json({ weiboSearchSettings });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.put("/weibo-search-settings", async (req, res) => {
+  try {
+    const weiboSearchSettings = await updateWeiboSearchSettings(req.body || {});
+    res.json({ ok: true, weiboSearchSettings });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+router.post("/weibo-search-settings/check", async (req, res) => {
+  try {
+    const weiboSearchSettings = normalizeWeiboSearchSettings(req.body || {});
+    const result = await checkWeiboSearchCookieAvailability(weiboSearchSettings.cookie);
     res.json({ ok: true, result });
   } catch (error) {
     res.status(400).json({ error: error.message });

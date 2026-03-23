@@ -15,6 +15,8 @@ const imageBaseUrl = process.env.OPENAI_IMAGE_BASE_URL
   || (imageProtocol === "dashscope"
     ? "https://dashscope.aliyuncs.com/api/v1"
     : textBaseUrl);
+const weiboSearchEnabled = String(process.env.WEIBO_SEARCH_ENABLED || "false").toLowerCase() === "true";
+const weiboSearchCookie = process.env.WEIBO_SEARCH_COOKIE || "";
 
 module.exports = {
   rootDir,
@@ -42,7 +44,9 @@ module.exports = {
   weibo: {
     appKey: process.env.WEIBO_APP_KEY || "",
     appSecret: process.env.WEIBO_APP_SECRET || "",
-    redirectUri: process.env.WEIBO_REDIRECT_URI || ""
+    redirectUri: process.env.WEIBO_REDIRECT_URI || "",
+    searchEnabled: weiboSearchEnabled,
+    searchCookie: weiboSearchCookie
   },
   reminderWebhookUrl: process.env.REMINDER_WEBHOOK_URL || "",
   autoSyncMetrics: String(process.env.AUTO_SYNC_METRICS || "true").toLowerCase() !== "false",
